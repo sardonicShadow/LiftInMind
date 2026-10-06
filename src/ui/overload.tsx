@@ -11,7 +11,7 @@ const count = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
 
 export const STATUS_LABEL: Record<OverloadStatus, string> = {
   overloaded: 'Progressive overload',
-  missed: 'No overload',
+  missed: 'No progressive overload',
   first: 'First time',
   'new-range': 'New rep range',
   deload: 'Deload',

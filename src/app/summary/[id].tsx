@@ -12,15 +12,16 @@ import { Icon } from '@/ui/icons';
 import { OverloadMark, statusColor } from '@/ui/overload';
 import { colors, fonts } from '@/ui/theme';
 import { WorkoutReport } from '@/ui/WorkoutReport';
+import { WorkoutReview } from '@/ui/WorkoutReview';
 
 export default function SummaryScreen() {
-  // `report=1` comes from finishing a workout: open the report pop-up straight away.
-  const { id, report } = useLocalSearchParams<{ id: string; report?: string }>();
-  const { data, exerciseById, updateSession, setSessionDate, deleteSession } = useStore();
+  const { id } = useLocalSearchParams<{ id: string }>();
+  const { data, exerciseById, updateSession, setSessionDate, finishSession, deleteSession } = useStore();
   const session = data.sessions.find((s) => s.id === id);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [pickingDate, setPickingDate] = useState(false);
-  const [showReport, setShowReport] = useState(report === '1');
+  // Opens once a reviewed workout is saved.
+  const [showReport, setShowReport] = useState(false);
   const workoutDays = useMemo(() => new Set(finishedSessions(data.sessions).map((s) => s.date)), [data.sessions]);
   if (!session) {
     return (
@@ -28,6 +29,18 @@ export default function SummaryScreen() {
         <T variant="h2">Workout not found</T>
         <Button title="Back to week" onPress={() => router.replace('/')} />
       </Screen>
+    );
+  }
+  // A finished workout comes here for review first; saving it opens the report.
+  if (session.finishedAt == null) {
+    return (
+      <WorkoutReview
+        session={session}
+        onSave={() => {
+          finishSession(session.id);
+          setShowReport(true);
+        }}
+      />
     );
   }
   const unit = data.unit;
@@ -50,10 +63,7 @@ export default function SummaryScreen() {
   const judged = overload.filter((r) => r.status === 'overloaded' || r.status === 'missed');
   const wins = judged.filter((r) => r.status === 'overloaded').length;
   const stats = { total, workingSets: workingSetCount(session), minutes, change };
-  const closeReport = () => {
-    setShowReport(false);
-    if (report) router.setParams({ report: undefined });
-  };
+  const closeReport = () => setShowReport(false);
 
   const rows = session.entries
     .map((e) => {
@@ -134,7 +144,7 @@ export default function SummaryScreen() {
             </T>
           </View>
           <View>
-            <T variant="num" color={judged.length ? (wins > 0 ? colors.good : colors.bad) : undefined}>
+            <T variant="num" color={judged.length ? (wins === judged.length ? colors.good : colors.bad) : undefined}>
               {judged.length ? `${wins} of ${judged.length}` : '–'}
             </T>
             <T variant="small" style={{ fontSize: 12 }}>
@@ -152,7 +162,10 @@ export default function SummaryScreen() {
         {rows.map((r) => (
           <View key={r.id} style={{ gap: 6, paddingVertical: 8 }}>
             <Row style={{ justifyContent: 'space-between' }}>
-              <T style={{ flex: 1 }} numberOfLines={1}>
+              <T
+                style={[{ flex: 1 }, r.status === 'missed' && { fontFamily: fonts.semibold }]}
+                color={r.status === 'missed' ? colors.bad : undefined}
+                numberOfLines={1}>
                 {r.name}
               </T>
               <T>{formatVolume(r.volume, unit)}</T>

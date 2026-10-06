@@ -134,6 +134,17 @@ export function comparisonPerformance(
   return previousPerformance(sessions, exerciseId, opts.excludeId, { skipDeload: true, before: opts.before, range });
 }
 
+/**
+ * "Last time" for an exercise while logging `session`: the workout it's
+ * measured against, or failing that the latest one before it.
+ */
+export function lastTime(sessions: Session[], session: Session, exerciseId: string, range: RepRange): Previous | null {
+  return (
+    comparisonPerformance(sessions, exerciseId, range, { excludeId: session.id, before: session }) ??
+    previousPerformance(sessions, exerciseId, session.id, { before: session })
+  );
+}
+
 export interface ExerciseHistoryPoint {
   session: Session;
   sets: SetValue[];
