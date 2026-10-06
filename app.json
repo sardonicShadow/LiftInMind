@@ -1,0 +1,47 @@
+{
+  "expo": {
+    "name": "LiftInMind",
+    "slug": "liftinmind",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "scheme": "liftinmind",
+    "userInterfaceStyle": "dark",
+    "backgroundColor": "#0E0F11",
+    "ios": {
+      "supportsTablet": false
+    },
+    "android": {
+      "adaptiveIcon": {
+        "backgroundColor": "#0E0F11",
+        "foregroundImage": "./assets/android-icon-foreground.png",
+        "backgroundImage": "./assets/android-icon-background.png",
+        "monochromeImage": "./assets/android-icon-monochrome.png"
+      },
+      "predictiveBackGestureEnabled": false
+    },
+    "web": {
+      "output": "single",
+      "favicon": "./assets/favicon.png",
+      "name": "LiftInMind",
+      "shortName": "LiftInMind",
+      "themeColor": "#0E0F11",
+      "backgroundColor": "#0E0F11",
+      "display": "standalone"
+    },
+    "plugins": [
+      "expo-router",
+      [
+        "expo-splash-screen",
+        {
+          "backgroundColor": "#0E0F11",
+          "image": "./assets/splash-icon.png",
+          "imageWidth": 76
+        }
+      ]
+    ],
+    "experiments": {
+      "typedRoutes": true
+    }
+  }
+}
