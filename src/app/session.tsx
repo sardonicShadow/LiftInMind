@@ -1,8 +1,9 @@
-import { router } from 'expo-router';
+import { router, useLocalSearchParams } from 'expo-router';
 import { useEffect, useMemo, useState } from 'react';
 import { Pressable, StyleSheet, View } from 'react-native';
 
 import { EQUIPMENT_LABEL } from '@/lib/catalog';
+import { setIssues, type SetIssue } from '@/lib/checks';
 import { shortDate, toISODate, today } from '@/lib/dates';
 import {
   compareSet,
@@ -10,19 +11,22 @@ import {
   DEFAULT_TARGET,
   entryVolume,
   finishedSessions,
-  previousPerformance,
+  lastTime,
+  overloadVerdict,
   sessionTarget,
   sessionVolume,
+  workingSets,
 } from '@/lib/logic';
 import { useStore } from '@/lib/store';
 import type { LoggedSet, Session, SessionEntry, SetValue } from '@/lib/types';
-import { formatSets, formatVolume, fromDisplay, toDisplay } from '@/lib/units';
+import { formatSets, formatVolume, formatWeight, fromDisplay, toDisplay } from '@/lib/units';
 import { Button, Card, IconButton, Row, Screen, T } from '@/ui/components';
 import { DatePicker } from '@/ui/DatePicker';
 import { ExercisePicker } from '@/ui/ExercisePicker';
 import { Icon } from '@/ui/icons';
+import { CheckSheet, issueText, type FlaggedSet } from '@/ui/checks';
 import { NumInput } from '@/ui/NumInput';
-import { goalText } from '@/ui/overload';
+import { goalText, overloadReasonText } from '@/ui/overload';
 import { colors, fonts } from '@/ui/theme';
 
 function useNow(intervalMs = 1000) {
@@ -44,6 +48,8 @@ const clock = (ms: number) => {
 
 export default function SessionScreen() {
   const session = useStore().activeSession;
+  // `exercise` opens a given exercise, such as one picked from the review.
+  const { exercise } = useLocalSearchParams<{ exercise?: string }>();
   if (!session) {
     return (
       <Screen>
@@ -52,19 +58,26 @@ export default function SessionScreen() {
       </Screen>
     );
   }
-  return <ActiveSession session={session} />;
+  const start = Number(exercise);
+  return <ActiveSession session={session} startAt={Number.isInteger(start) ? start : undefined} />;
 }
 
-function ActiveSession({ session }: { session: Session }) {
-  const { data, exerciseById, updateSession, setSessionDate, addExerciseToSession, finishSession, discardSession } = useStore();
+function ActiveSession({ session, startAt }: { session: Session; startAt?: number }) {
+  const { data, exerciseById, updateSession, setSessionDate, addExerciseToSession, discardSession } = useStore();
   const unit = data.unit;
   const now = useNow();
   const firstOpen = session.entries.findIndex((e) => e.sets.some((s) => !s.done));
-  const [index, setIndex] = useState(firstOpen >= 0 ? firstOpen : 0);
+  const [index, setIndex] = useState(
+    startAt != null && startAt >= 0 && startAt < session.entries.length ? startAt : firstOpen >= 0 ? firstOpen : 0,
+  );
   const [picking, setPicking] = useState(false);
   const [restUntil, setRestUntil] = useState<number | null>(null);
   const [confirmDiscard, setConfirmDiscard] = useState(false);
   const [pickingDate, setPickingDate] = useState(false);
+  // Flagged numbers the user said are right, so they aren't asked twice.
+  const [okayed, setOkayed] = useState<Set<string>>(() => new Set());
+  // Where to go once the user has checked the flagged numbers.
+  const [pendingMove, setPendingMove] = useState<(() => void) | null>(null);
   // Only a workout dated the day it was started gets a live clock and rest timer,
   // so one logged after the fact doesn't, and a late session keeps them past midnight.
   const startDay = toISODate(new Date(session.startedAt));
@@ -78,21 +91,23 @@ function ActiveSession({ session }: { session: Session }) {
 
   // "Last time" looks back from this workout's date, so a back-dated workout
   // builds on what came before it rather than on later sessions. It's the
-  // workout this one is measured against (the last normal one with the same
-  // rep range), so it agrees with the target and the report; failing that,
-  // simply the latest one.
-  const prev = useMemo(() => {
-    if (!entry || !target) return null;
-    return (
-      comparisonPerformance(data.sessions, entry.exerciseId, target, { excludeId: session.id, before: session }) ??
-      previousPerformance(data.sessions, entry.exerciseId, session.id, { before: session })
-    );
-  }, [data.sessions, entry, session, target]);
+  // workout this one is measured against (`basis`: the last normal one with
+  // the same rep range), so it agrees with the goal and the report; failing
+  // that, simply the latest one.
+  const basis = useMemo(
+    () => (entry && target ? comparisonPerformance(data.sessions, entry.exerciseId, target, { excludeId: session.id, before: session }) : null),
+    [data.sessions, entry, session, target],
+  );
+  const prev = useMemo(() => (entry && target ? lastTime(data.sessions, session, entry.exerciseId, target) : null), [data.sessions, entry, session, target]);
   // The same goal the last workout's report set, so a deload week doesn't reset progress.
   const suggestion = useMemo(
     () => (entry && target ? sessionTarget(data.sessions, session, entry.exerciseId, target, target.progression ?? session.progression, unit) : null),
     [data.sessions, entry, session, target, unit],
   );
+
+  // Whether what's logged so far already beats the workout it's measured against.
+  const loggedSets = entry ? workingSets(entry.sets) : [];
+  const verdict = !session.deload && basis && target && loggedSets.length ? overloadVerdict(loggedSets, basis.sets, target.repMin, unit) : null;
 
   const setSets = (fn: (sets: LoggedSet[]) => LoggedSet[]) =>
     updateSession(session.id, (s) => ({
@@ -114,16 +129,35 @@ function ActiveSession({ session }: { session: Session }) {
     return suggestion?.sets[n] ?? prev?.sets[Math.min(n, (prev?.sets.length ?? 1) - 1)] ?? null;
   };
 
-  const toggleDone = (k: number) => {
-    const set = entry!.sets[k];
-    if (set.done) return patchSet(k, { done: false });
+  // A suggested weight is saved as the weight it shows, so it compares the same as one typed in.
+  // A bodyweight move with nothing to go on starts from no added weight.
+  const suggestedWeight = (k: number) => {
     const ph = placeholderFor(k);
-    // Save an accepted placeholder as the weight it shows, so it compares the same as one typed in.
-    const weight = set.weight ?? (ph ? fromDisplay(toDisplay(ph.weight, unit), unit) : null);
-    const reps = set.reps ?? ph?.reps ?? null;
+    if (ph) return fromDisplay(toDisplay(ph.weight, unit), unit);
+    return exercise?.equipment === 'bodyweight' ? 0 : null;
+  };
+
+  const logged = (k: number, next: LoggedSet) => {
+    patchSet(k, next);
+    if (next.done && !entry!.sets[k].done && next.kind === 'working' && live) setRestUntil(Date.now() + (target?.restSec ?? 120) * 1000);
+  };
+
+  // What's entered counts without a confirmation: a set is logged once it has
+  // reps, and a weight left blank takes the suggested weight shown in it.
+  const editSet = (k: number, patch: Pick<LoggedSet, 'weight'> | Pick<LoggedSet, 'reps'>) => {
+    const set = entry!.sets[k];
+    const next = { ...set, ...patch };
+    if ('reps' in patch && patch.reps != null && set.reps == null && next.weight == null) next.weight = suggestedWeight(k);
+    logged(k, { ...next, done: next.weight != null && next.reps != null });
+  };
+
+  // The check logs the suggested numbers as they are.
+  const logSuggested = (k: number) => {
+    const set = entry!.sets[k];
+    const weight = set.weight ?? suggestedWeight(k);
+    const reps = set.reps ?? placeholderFor(k)?.reps ?? null;
     if (weight == null || reps == null) return;
-    patchSet(k, { weight, reps, done: true });
-    if (set.kind === 'working' && live) setRestUntil(Date.now() + (target?.restSec ?? 120) * 1000);
+    logged(k, { ...set, weight, reps, done: true });
   };
 
   const addSet = (kind: LoggedSet['kind']) =>
@@ -142,16 +176,38 @@ function ActiveSession({ session }: { session: Session }) {
     setIndex(Math.max(0, i - 1));
   };
 
-  const finish = () => {
-    const anyDone = session.entries.some((e) => e.sets.some((s) => s.done));
-    if (!anyDone) {
-      discardSession(session.id);
-      router.replace('/');
-      return;
-    }
-    finishSession(session.id);
-    router.replace({ pathname: '/summary/[id]', params: { id: session.id, report: '1' } });
+  // Numbers that look wrong, per set of this exercise, checked as they're typed.
+  const issues = entry && exercise ? entry.sets.map((s) => setIssues(s, exercise.equipment, prev?.sets ?? null)) : [];
+  const issueKey = (k: number, x: SetIssue) => `${i}:${k}:${x.field}:${x.field === 'weight' ? entry!.sets[k].weight : entry!.sets[k].reps}`;
+  const unchecked = issues.map((xs, k) => xs.filter((x) => !okayed.has(issueKey(k, x))));
+  const setLabel = (k: number) => (entry!.sets[k].kind === 'warmup' ? 'Warm-up' : `Set ${workingIndex(k) + 1}`);
+  const flagged: FlaggedSet[] = unchecked.flatMap((xs, k) => {
+    if (xs.length === 0) return [];
+    const s = entry!.sets[k];
+    const value = `${s.weight == null ? '–' : formatWeight(s.weight, unit)} × ${s.reps ?? '–'}`;
+    return [{ label: setLabel(k), value, issues: xs }];
+  });
+
+  // Moving to another exercise or finishing asks the user to check flagged numbers first.
+  const leave = (go: () => void) => (flagged.length ? setPendingMove(() => go) : go());
+  const confirmFlagged = () => {
+    const go = pendingMove;
+    setOkayed((ok) => new Set([...ok, ...unchecked.flatMap((xs, k) => xs.map((x) => issueKey(k, x)))]));
+    setPendingMove(null);
+    go?.();
   };
+
+  // Finishing opens the review; the workout is saved from there.
+  const finish = () =>
+    leave(() => {
+      const anyDone = session.entries.some((e) => e.sets.some((s) => s.done));
+      if (!anyDone) {
+        discardSession(session.id);
+        router.replace('/');
+        return;
+      }
+      router.replace({ pathname: '/summary/[id]', params: { id: session.id } });
+    });
 
   const restLeft = restUntil ? restUntil - now : 0;
   const exVolume = entry ? entryVolume(entry) : 0;
@@ -195,7 +251,7 @@ function ActiveSession({ session }: { session: Session }) {
                 key={`${e.exerciseId}-${k}`}
                 accessibilityRole="button"
                 accessibilityLabel={`Go to ${exerciseById(e.exerciseId)?.name ?? 'exercise'}`}
-                onPress={() => setIndex(k)}
+                onPress={() => (k === i ? undefined : leave(() => setIndex(k)))}
                 style={{ flex: 1, paddingVertical: 6 }}>
                 <View
                   style={{
@@ -229,7 +285,7 @@ function ActiveSession({ session }: { session: Session }) {
         </View>
       </Row>
       {nextEntry ? (
-        <Pressable accessibilityRole="button" onPress={() => setIndex(i + 1)} style={styles.next}>
+        <Pressable accessibilityRole="button" onPress={() => leave(() => setIndex(i + 1))} style={styles.next}>
           <T style={{ fontFamily: fonts.semibold, fontSize: 14, maxWidth: 170 }} numberOfLines={1}>
             {`Next: ${exerciseById(nextEntry.exerciseId)?.name ?? ''}`}
           </T>
@@ -287,19 +343,31 @@ function ActiveSession({ session }: { session: Session }) {
             )}
           </Card>
 
-          {suggestion ? (
-            <View style={styles.target}>
-              <Icon name="up" size={18} color={colors.accent} strokeWidth={2.2} />
-              <T style={{ flex: 1 }}>
-                <T color={colors.muted}>{`${goalText(suggestion, unit, 'last time')}: `}</T>
-                <T color={colors.accent} style={{ fontFamily: fonts.bold }}>
+          <View style={[styles.goal, verdict && !verdict.overloaded && styles.goalMissed]}>
+            <T variant="label" color={colors.accent}>
+              {session.deload ? 'Deload target' : 'Progressive overload goal'}
+            </T>
+            {suggestion ? (
+              <>
+                <T variant="num" color={colors.accent} style={{ fontSize: 26, lineHeight: 30 }}>
                   {fmtSets(suggestion.sets)}
                 </T>
-              </T>
-            </View>
-          ) : target ? (
-            <T variant="small">{`Target: ${target.sets} sets of ${target.repMin} to ${target.repMax} reps`}</T>
-          ) : null}
+                <T variant="small">{goalText(suggestion, unit, 'last time')}</T>
+              </>
+            ) : target ? (
+              <T variant="small">{`No goal yet, so today sets your baseline: ${target.sets} sets of ${target.repMin} to ${target.repMax} reps.`}</T>
+            ) : null}
+            {verdict ? (
+              <Row gap={8} style={{ alignItems: 'flex-start', marginTop: 4 }}>
+                <Icon name={verdict.overloaded ? 'check' : 'close'} size={18} color={verdict.overloaded ? colors.good : colors.bad} strokeWidth={3} />
+                <T
+                  style={{ flex: 1, fontFamily: fonts.semibold, fontSize: 15, lineHeight: 20 }}
+                  color={verdict.overloaded ? colors.good : colors.bad}>
+                  {`${verdict.overloaded ? 'Progressive overload so far' : 'No progressive overload yet'}: ${overloadReasonText(verdict.reason, unit)}`}
+                </T>
+              </Row>
+            ) : null}
+          </View>
 
           <View style={{ gap: 8 }}>
             <View style={styles.gridHead}>
@@ -322,60 +390,65 @@ function ActiveSession({ session }: { session: Session }) {
               const n = workingIndex(k);
               const prevSet = warm ? null : prev?.sets[n];
               const ph = placeholderFor(k);
+              const flags = issues[k] ?? [];
+              const badWeight = flags.some((x) => x.field === 'weight');
+              const badReps = flags.some((x) => x.field === 'reps');
               const trend = set.done && !warm && prevSet && set.weight != null && set.reps != null ? compareSet({ weight: set.weight, reps: set.reps }, prevSet) : null;
               return (
-                <Pressable
-                  key={k}
-                  onLongPress={() => setSets((sets) => sets.filter((_, j) => j !== k))}
-                  delayLongPress={600}
-                  style={[styles.setRow, warm && styles.warmRow, !set.done && k === entry.sets.findIndex((s) => !s.done) && styles.activeRow]}>
-                  <T style={[styles.cSet, { textAlign: 'center', fontFamily: fonts.semibold }]} color={warm ? colors.muted : colors.text}>
-                    {warm ? 'W' : String(n + 1)}
-                  </T>
-                  <T variant="small" style={styles.cPrev} numberOfLines={1}>
-                    {warm ? 'Warm-up' : prevSet ? `${toDisplay(prevSet.weight, unit)} × ${prevSet.reps}` : '–'}
-                  </T>
-                  {set.done ? (
-                    <>
-                      <T variant="num" style={[styles.cW, { textAlign: 'center' }]} color={warm ? colors.muted : colors.text}>
-                        {String(toDisplay(set.weight!, unit))}
-                      </T>
-                      <T variant="num" style={[styles.cR, { textAlign: 'center' }]} color={trend === 'up' ? colors.accent : warm ? colors.muted : colors.text}>
-                        {`${set.reps}${trend === 'up' ? ' ▲' : ''}`}
-                      </T>
-                    </>
-                  ) : (
-                    <>
-                      <View style={styles.cW}>
-                        <NumInput
-                          label={`Set ${warm ? 'warm-up' : n + 1} weight in ${unit}`}
-                          value={set.weight == null ? null : toDisplay(set.weight, unit)}
-                          placeholder={ph ? String(toDisplay(ph.weight, unit)) : unit}
-                          onChange={(v) => patchSet(k, { weight: v == null ? null : fromDisplay(v, unit) })}
-                        />
-                      </View>
-                      <View style={styles.cR}>
-                        <NumInput
-                          label={`Set ${warm ? 'warm-up' : n + 1} reps`}
-                          decimal={false}
-                          value={set.reps}
-                          placeholder={ph ? String(ph.reps) : 'reps'}
-                          onChange={(v) => patchSet(k, { reps: v })}
-                        />
-                      </View>
-                    </>
-                  )}
-                  <View style={styles.cDone}>
-                    <Pressable
-                      accessibilityRole="checkbox"
-                      accessibilityState={{ checked: set.done }}
-                      accessibilityLabel={`Complete set ${warm ? 'warm-up' : n + 1}`}
-                      onPress={() => toggleDone(k)}
-                      style={[styles.check, set.done ? { backgroundColor: warm ? colors.surface3 : colors.accent, borderWidth: 0 } : null]}>
-                      <Icon name="check" size={18} color={set.done ? (warm ? colors.muted : colors.accentInk) : colors.dim} strokeWidth={2.6} />
-                    </Pressable>
-                  </View>
-                </Pressable>
+                <View key={k} style={{ gap: 4 }}>
+                  <Pressable
+                    onLongPress={() => setSets((sets) => sets.filter((_, j) => j !== k))}
+                    delayLongPress={600}
+                    style={[
+                      styles.setRow,
+                      warm && styles.warmRow,
+                      set.done && !warm && styles.doneRow,
+                      !set.done && k === entry.sets.findIndex((s) => !s.done) && styles.activeRow,
+                      flags.length > 0 && styles.badRow,
+                    ]}>
+                    <T style={[styles.cSet, { textAlign: 'center', fontFamily: fonts.semibold }]} color={warm ? colors.muted : colors.text}>
+                      {warm ? 'W' : String(n + 1)}
+                    </T>
+                    <T variant="small" style={styles.cPrev} numberOfLines={1}>
+                      {warm ? 'Warm-up' : prevSet ? `${toDisplay(prevSet.weight, unit)} × ${prevSet.reps}` : '–'}
+                    </T>
+                    <View style={styles.cW}>
+                      <NumInput
+                        label={`Set ${warm ? 'warm-up' : n + 1} weight in ${unit}`}
+                        value={set.weight == null ? null : toDisplay(set.weight, unit)}
+                        placeholder={ph ? String(toDisplay(ph.weight, unit)) : unit}
+                        onChange={(v) => editSet(k, { weight: v == null ? null : fromDisplay(v, unit) })}
+                        style={badWeight ? styles.badInput : undefined}
+                      />
+                    </View>
+                    <View style={styles.cR}>
+                      <NumInput
+                        label={`Set ${warm ? 'warm-up' : n + 1} reps`}
+                        decimal={false}
+                        value={set.reps}
+                        placeholder={ph ? String(ph.reps) : 'reps'}
+                        onChange={(v) => editSet(k, { reps: v })}
+                        style={badReps ? styles.badInput : trend === 'up' ? { color: colors.accent } : undefined}
+                      />
+                    </View>
+                    <View style={styles.cDone}>
+                      <Pressable
+                        accessibilityRole="checkbox"
+                        accessibilityState={{ checked: set.done, disabled: set.done }}
+                        accessibilityLabel={set.done ? `Set ${warm ? 'warm-up' : n + 1} logged` : `Complete set ${warm ? 'warm-up' : n + 1}`}
+                        disabled={set.done}
+                        onPress={() => logSuggested(k)}
+                        style={[styles.check, set.done ? { backgroundColor: warm ? colors.surface3 : colors.accent, borderWidth: 0 } : null]}>
+                        <Icon name="check" size={18} color={set.done ? (warm ? colors.muted : colors.accentInk) : colors.dim} strokeWidth={2.6} />
+                      </Pressable>
+                    </View>
+                  </Pressable>
+                  {flags.map((x) => (
+                    <T key={x.kind} variant="small" color={colors.bad} style={{ paddingHorizontal: 8, fontFamily: fonts.semibold }}>
+                      {issueText(x, unit)}
+                    </T>
+                  ))}
+                </View>
               );
             })}
             <Row>
@@ -383,7 +456,7 @@ function ActiveSession({ session }: { session: Session }) {
               <Button title="+ Add set" variant="outline" size="medium" style={{ flex: 1 }} onPress={() => addSet('working')} />
             </Row>
             <T variant="small" style={{ fontSize: 12 }}>
-              Warm-ups are saved but never count toward volume or your report. Long-press a set to delete it.
+              A set is logged once it has reps, and a blank weight uses the suggested one. Tap the check to log the suggested numbers as they are. Warm-ups never count toward volume or your report. Long-press a set to delete it.
             </T>
           </View>
 
@@ -434,6 +507,14 @@ function ActiveSession({ session }: { session: Session }) {
         }}
       />
 
+      <CheckSheet
+        visible={pendingMove != null}
+        flagged={flagged}
+        unit={unit}
+        onFix={() => setPendingMove(null)}
+        onConfirm={confirmFlagged}
+      />
+
       <ExercisePicker
         visible={picking}
         before={session}
@@ -442,7 +523,7 @@ function ActiveSession({ session }: { session: Session }) {
         onPick={(ids) => {
           const start = session.entries.length;
           ids.forEach((id) => addExerciseToSession(session.id, id));
-          setIndex(start);
+          leave(() => setIndex(start));
         }}
       />
     </Screen>
@@ -453,21 +534,15 @@ const styles = StyleSheet.create({
   top: { paddingHorizontal: 20, paddingTop: 12, paddingBottom: 12, gap: 12 },
   dateBtn: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingVertical: 2 },
   finish: { height: 40, paddingHorizontal: 16, borderRadius: 20, backgroundColor: colors.surface2, justifyContent: 'center' },
-  target: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    padding: 12,
-    borderRadius: 14,
-    borderWidth: 1,
-    borderStyle: 'dashed',
-    borderColor: colors.accentLine,
-    backgroundColor: colors.accentBg,
-  },
+  goal: { gap: 2, padding: 14, borderRadius: 16, borderWidth: 1, borderColor: colors.accentLine, backgroundColor: colors.accentBg },
+  goalMissed: { borderColor: colors.bad, borderWidth: 2 },
   gridHead: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 4 },
   setRow: { flexDirection: 'row', alignItems: 'center', gap: 8, height: 56, paddingHorizontal: 4, borderRadius: 14, backgroundColor: colors.surface },
   warmRow: { height: 48, backgroundColor: '#131518' },
   activeRow: { borderWidth: 2, borderColor: colors.accent },
+  doneRow: { backgroundColor: colors.accentBg },
+  badRow: { borderWidth: 2, borderColor: colors.bad },
+  badInput: { color: colors.bad, backgroundColor: colors.badSoft, borderWidth: 1, borderColor: colors.bad },
   cSet: { width: 32 },
   cPrev: { flex: 1 },
   cW: { width: 72 },

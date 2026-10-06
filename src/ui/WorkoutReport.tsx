@@ -58,17 +58,19 @@ function ExerciseResult({ r, session }: { r: ExerciseReport; session: Session })
           : 'Nothing to compare yet. Today sets your baseline';
   // The goal builds on another workout after a deload, or when a later workout was logged first.
   const from = r.goalFrom ? shortDate(r.goalFrom.date).slice(4) : null;
-  const border = r.status === 'overloaded' ? styles.goodBorder : r.status === 'missed' ? styles.badBorder : null;
+  const missed = r.status === 'missed';
   return (
-    <View style={[styles.card, border]}>
+    <View style={[styles.card, r.status === 'overloaded' && styles.goodBorder, missed && styles.missedCard]}>
       <Row gap={12} style={{ alignItems: 'flex-start' }}>
-        <OverloadMark status={r.status} />
+        <OverloadMark status={r.status} size={missed ? 40 : 32} />
         <View style={{ flex: 1, gap: 2 }}>
           <T style={{ fontFamily: fonts.semibold, fontSize: 17 }}>{exerciseById(r.exerciseId)?.name ?? r.exerciseId}</T>
-          <T variant="small" color={statusColor(r.status)} style={{ fontFamily: fonts.semibold }}>
+          <T variant="small" color={statusColor(r.status)} style={{ fontFamily: fonts.semibold, fontSize: missed ? 16 : undefined }}>
             {STATUS_LABEL[r.status]}
           </T>
-          <T variant="small">{why}</T>
+          <T variant="small" color={missed ? colors.bad : undefined}>
+            {why}
+          </T>
         </View>
       </Row>
       <View style={{ gap: 6 }}>
@@ -117,11 +119,12 @@ export function WorkoutReport({
   rows: ExerciseReport[];
   stats: WorkoutStats;
 }) {
-  const { data } = useStore();
+  const { data, exerciseById } = useStore();
   const unit = data.unit;
   const judged = rows.filter((r) => r.status === 'overloaded' || r.status === 'missed');
   const wins = judged.filter((r) => r.status === 'overloaded').length;
   const allWon = judged.length > 0 && wins === judged.length;
+  const missed = judged.filter((r) => r.status === 'missed');
   const headline = session.deload
     ? 'Deload workout. It’s lighter on purpose, so nothing is judged.'
     : judged.length === 0
@@ -130,7 +133,7 @@ export function WorkoutReport({
         : 'Nothing to compare yet. Today sets your baseline.'
       : allWon
         ? `You progressively overloaded every exercise you can compare.`
-        : `You progressively overloaded ${wins} of ${judged.length} exercises.`;
+        : `You missed progressive overload on ${missed.length} of ${judged.length} exercises.`;
 
   return (
     <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose}>
@@ -158,7 +161,7 @@ export function WorkoutReport({
               <Stat
                 label="Overloaded"
                 value={judged.length ? `${wins} of ${judged.length}` : '–'}
-                color={judged.length ? (wins > 0 ? colors.good : colors.bad) : undefined}
+                color={judged.length ? (allWon ? colors.good : colors.bad) : undefined}
               />
             </View>
             {stats.change != null ? (
@@ -167,8 +170,13 @@ export function WorkoutReport({
               </T>
             ) : null}
 
-            <View style={[styles.headline, allWon && styles.goodBorder]}>
-              <T style={{ fontFamily: fonts.semibold, fontSize: 16, lineHeight: 22 }}>{headline}</T>
+            <View style={[styles.headline, allWon && styles.goodBorder, missed.length > 0 && styles.missedCard]}>
+              <T color={missed.length ? colors.bad : undefined} style={{ fontFamily: fonts.semibold, fontSize: 16, lineHeight: 22 }}>
+                {headline}
+              </T>
+              {missed.length ? (
+                <T style={{ fontFamily: fonts.semibold }}>{`Missed: ${missed.map((r) => exerciseById(r.exerciseId)?.name ?? r.exerciseId).join(', ')}`}</T>
+              ) : null}
               {judged.length > 0 ? (
                 <T variant="small">Each exercise is compared with the last time you did it with the same rep range, not counting deload weeks.</T>
               ) : null}
@@ -206,7 +214,7 @@ const styles = StyleSheet.create({
   headline: { gap: 4, padding: 14, borderRadius: 16, backgroundColor: colors.surface2, borderWidth: 1, borderColor: 'transparent' },
   card: { gap: 12, padding: 16, borderRadius: 18, backgroundColor: colors.bg, borderWidth: 1, borderColor: colors.line },
   goodBorder: { borderColor: colors.good },
-  badBorder: { borderColor: colors.badSoft },
+  missedCard: { borderColor: colors.bad, borderWidth: 2, backgroundColor: colors.badBg },
   goal: { gap: 2, padding: 12, borderRadius: 14, backgroundColor: colors.accentBg, borderWidth: 1, borderColor: colors.accentLine },
   footer: { padding: 20, paddingTop: 12, borderTopWidth: 1, borderTopColor: colors.line },
 });

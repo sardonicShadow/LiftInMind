@@ -22,6 +22,7 @@ export const colors = {
   goodSoft: '#14301F',
   bad: '#FF6B6B',
   badSoft: '#3A1A1C',
+  badBg: '#1E1113',
   neutralText: '#C4C9CF',
 };
 
