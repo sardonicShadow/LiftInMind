@@ -2,7 +2,7 @@ import { Modal, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { shortDate } from '@/lib/dates';
-import type { ExerciseReport } from '@/lib/logic';
+import { compareTimeline, type ExerciseReport } from '@/lib/logic';
 import { useStore } from '@/lib/store';
 import type { Session } from '@/lib/types';
 import { formatSets, formatVolume } from '@/lib/units';
@@ -45,7 +45,7 @@ function SetLine({ label, value, color }: { label: string; value: string; color?
   );
 }
 
-function ExerciseResult({ r }: { r: ExerciseReport }) {
+function ExerciseResult({ r, session }: { r: ExerciseReport; session: Session }) {
   const { data, exerciseById } = useStore();
   const unit = data.unit;
   const why =
@@ -53,7 +53,11 @@ function ExerciseResult({ r }: { r: ExerciseReport }) {
       ? overloadReasonText(r.reason, unit)
       : r.status === 'deload'
         ? 'Lighter on purpose, so it isn’t judged'
-        : 'Nothing to compare yet. Today sets your baseline';
+        : r.status === 'new-range'
+          ? `First time at ${r.scheme.repMin} to ${r.scheme.repMax} reps, so today sets your baseline`
+          : 'Nothing to compare yet. Today sets your baseline';
+  // The goal builds on another workout after a deload, or when a later workout was logged first.
+  const from = r.goalFrom ? shortDate(r.goalFrom.date).slice(4) : null;
   const border = r.status === 'overloaded' ? styles.goodBorder : r.status === 'missed' ? styles.badBorder : null;
   return (
     <View style={[styles.card, border]}>
@@ -73,17 +77,24 @@ function ExerciseResult({ r }: { r: ExerciseReport }) {
           <SetLine label={`Last · ${shortDate(r.previous.session.date).slice(4)}`} value={formatSets(r.previous.sets, unit)} color={colors.muted} />
         ) : null}
       </View>
-      {r.goal ? (
-        <View style={styles.goal}>
-          <T variant="label" color={colors.accent}>
-            Next time
+      <View style={styles.goal}>
+        <T variant="label" color={colors.accent}>
+          Next time
+        </T>
+        <T variant="num" color={colors.accent} style={{ fontSize: 22, lineHeight: 26 }}>
+          {r.goal ? formatSets(r.goal.sets, unit) : `${r.scheme.sets} sets of ${r.scheme.repMin} to ${r.scheme.repMax} reps`}
+        </T>
+        <T variant="small">
+          {r.goal ? goalText(r.goal, unit, from ? `your ${from} workout` : 'today') : 'Your first normal workout with it sets the baseline'}
+        </T>
+        {from ? (
+          <T variant="small" style={{ fontSize: 12 }}>
+            {r.goalFrom && compareTimeline(r.goalFrom, session) > 0
+              ? `Builds on your ${from} workout, your most recent with this exercise.`
+              : `Builds on your ${from} workout, since deloads don’t change your goals.`}
           </T>
-          <T variant="num" color={colors.accent} style={{ fontSize: 22, lineHeight: 26 }}>
-            {formatSets(r.goal.sets, unit)}
-          </T>
-          <T variant="small">{goalText(r.goal, unit, r.status === 'deload' ? 'last time' : 'today')}</T>
-        </View>
-      ) : null}
+        ) : null}
+      </View>
     </View>
   );
 }
@@ -114,7 +125,9 @@ export function WorkoutReport({
   const headline = session.deload
     ? 'Deload workout. It’s lighter on purpose, so nothing is judged.'
     : judged.length === 0
-      ? 'First time logging these exercises. Today sets your baseline.'
+      ? rows.every((r) => r.status === 'first')
+        ? 'First time logging these exercises. Today sets your baseline.'
+        : 'Nothing to compare yet. Today sets your baseline.'
       : allWon
         ? `You progressively overloaded every exercise you can compare.`
         : `You progressively overloaded ${wins} of ${judged.length} exercises.`;
@@ -157,12 +170,12 @@ export function WorkoutReport({
             <View style={[styles.headline, allWon && styles.goodBorder]}>
               <T style={{ fontFamily: fonts.semibold, fontSize: 16, lineHeight: 22 }}>{headline}</T>
               {judged.length > 0 ? (
-                <T variant="small">Each exercise is compared with the last time you did it, not counting deload weeks.</T>
+                <T variant="small">Each exercise is compared with the last time you did it with the same rep range, not counting deload weeks.</T>
               ) : null}
             </View>
 
             {rows.map((r) => (
-              <ExerciseResult key={r.exerciseId} r={r} />
+              <ExerciseResult key={r.exerciseId} r={r} session={session} />
             ))}
           </ScrollView>
           <View style={styles.footer}>

@@ -45,7 +45,7 @@ export default function SummaryScreen() {
   const elapsed = session.finishedAt && loggedSameDay ? Math.round((session.finishedAt - session.startedAt) / 60000) : 0;
   const minutes = elapsed >= 1 ? elapsed : null;
 
-  const overload = workoutReport(data.sessions, session);
+  const overload = workoutReport(data.sessions, session, unit);
   const statusOf = new Map(overload.map((r) => [r.exerciseId, r.status]));
   const judged = overload.filter((r) => r.status === 'overloaded' || r.status === 'missed');
   const wins = judged.filter((r) => r.status === 'overloaded').length;
@@ -171,7 +171,7 @@ export default function SummaryScreen() {
           </View>
         ))}
         <T variant="small" style={{ fontSize: 12 }}>
-          Green check: progressive overload. Red X: no overload. Each is compared with the last time you did that exercise.
+          Green check: progressive overload. Red X: no overload. Each exercise is compared with the last time you did it with the same rep range, not counting deload weeks.
         </T>
       </View>
 

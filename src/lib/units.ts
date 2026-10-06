@@ -30,7 +30,7 @@ export function formatVolume(lb: number, unit: Unit): string {
 /** "135 lb × 10 · 10 · 9" when every set used the same weight, otherwise "135×10 · 125×12". */
 export function formatSets(sets: SetValue[], unit: Unit): string {
   if (sets.length === 0) return '';
-  return sets.every((s) => s.weight === sets[0].weight)
+  return sets.every((s) => toDisplay(s.weight, unit) === toDisplay(sets[0].weight, unit))
     ? `${formatWeight(sets[0].weight, unit)} × ${sets.map((s) => s.reps).join(' · ')}`
     : sets.map((s) => `${formatNumber(toDisplay(s.weight, unit))}×${s.reps}`).join(' · ');
 }

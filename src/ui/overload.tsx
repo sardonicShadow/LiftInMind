@@ -13,6 +13,7 @@ export const STATUS_LABEL: Record<OverloadStatus, string> = {
   overloaded: 'Progressive overload',
   missed: 'No overload',
   first: 'First time',
+  'new-range': 'New rep range',
   deload: 'Deload',
 };
 
@@ -20,7 +21,7 @@ export function statusColor(status: OverloadStatus): string {
   return status === 'overloaded' ? colors.good : status === 'missed' ? colors.bad : colors.muted;
 }
 
-/** One line on why an exercise did or didn't overload last time's numbers. */
+/** One line on why an exercise did or didn't overload the workout it's measured against. */
 export function overloadReasonText(reason: OverloadReason, unit: Unit): string {
   const w = (lb: number) => formatWeight(lb, unit);
   switch (reason.kind) {
@@ -32,10 +33,14 @@ export function overloadReasonText(reason: OverloadReason, unit: Unit): string {
       return `Same top sets plus ${formatVolume(reason.volume, unit)} more volume`;
     case 'too-heavy':
       return `Best set at ${w(reason.weight)} was ${count(reason.reps, 'rep')}, under your ${reason.repMin}-rep minimum`;
+    case 'fewer-sets':
+      return `Only ${count(reason.sets, 'set')} at ${w(reason.weight)} or heavier, vs ${reason.previous} last time`;
     case 'lighter':
       return `Lighter than last time: ${w(reason.weight)} vs ${w(reason.previous)}`;
     case 'fewer-reps':
       return `${count(reason.reps, 'fewer rep')} at ${w(reason.weight)} than last time`;
+    case 'less-volume':
+      return `Same top sets, but ${formatVolume(reason.volume, unit)} less on lighter sets`;
     case 'matched':
       return 'Same weight and reps as last time';
   }
@@ -43,16 +48,19 @@ export function overloadReasonText(reason: OverloadReason, unit: Unit): string {
 
 /**
  * What a goal asks for. `since` names the workout it builds on: "today" in the
- * report right after a workout, "last time" while logging the next one.
+ * report right after a workout, "last time" while logging the next one, or
+ * "your Sep 12 workout" when the report's goal builds on another workout.
  */
-export function goalText(goal: Target, unit: Unit, since: 'today' | 'last time'): string {
+export function goalText(goal: Target, unit: Unit, since: string): string {
   switch (goal.kind) {
     case 'add-reps':
       return 'One more rep per set';
     case 'top-of-range':
-      return `Top of the rep range: add ${formatWeight(goal.increment, unit)}`;
+      return `Topped the rep range, so add ${formatWeight(goal.increment, unit)}`;
     case 'one-more-rep':
       return `Beat ${since} by one rep`;
+    case 'finish-sets':
+      return `Do all ${goal.sets.length} sets`;
     case 'add-weight':
       return `Add ${formatWeight(goal.increment, unit)}`;
     case 'repeat-weight':

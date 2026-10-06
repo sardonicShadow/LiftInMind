@@ -1,5 +1,5 @@
 import { addDays, mondayOf, parseISODate } from './dates';
-import { nextTarget, planDay, previousPerformance } from './logic';
+import { comparisonPerformance, nextTarget, planDay } from './logic';
 import type { AppData, LoggedSet, Plan, Session, TemplateExercise, WorkoutTemplate } from './types';
 
 /** Small deterministic PRNG so the sample history is the same every time. */
@@ -125,8 +125,8 @@ export function buildSampleData(todayISO: string): Pick<AppData, 'templates' | '
     const startedAt = parseISODate(date).getTime() + 18 * 3600_000 + Math.floor(random() * 3600_000);
     const entries = template.exercises.map((t) => {
       const sets: LoggedSet[] = [];
-      const prev = previousPerformance(sessions, t.exerciseId, undefined, { skipDeload: true });
-      const before = prev ? previousPerformance(sessions, t.exerciseId, undefined, { skipDeload: true, before: prev.session }) : null;
+      const prev = comparisonPerformance(sessions, t.exerciseId, t);
+      const before = prev ? comparisonPerformance(sessions, t.exerciseId, t, { before: prev.session }) : null;
       let plan_: { weight: number; reps: number }[];
       if (t.exerciseId === STALLED && prev) {
         plan_ = [80, 80, 80].map((w, i) => ({ weight: w, reps: i === 2 ? 11 : 12 }));

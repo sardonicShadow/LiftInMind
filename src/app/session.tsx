@@ -4,7 +4,16 @@ import { Pressable, StyleSheet, View } from 'react-native';
 
 import { EQUIPMENT_LABEL } from '@/lib/catalog';
 import { shortDate, toISODate, today } from '@/lib/dates';
-import { compareSet, DEFAULT_TARGET, entryVolume, finishedSessions, previousPerformance, sessionTarget, sessionVolume } from '@/lib/logic';
+import {
+  compareSet,
+  comparisonPerformance,
+  DEFAULT_TARGET,
+  entryVolume,
+  finishedSessions,
+  previousPerformance,
+  sessionTarget,
+  sessionVolume,
+} from '@/lib/logic';
 import { useStore } from '@/lib/store';
 import type { LoggedSet, Session, SessionEntry, SetValue } from '@/lib/types';
 import { formatSets, formatVolume, fromDisplay, toDisplay } from '@/lib/units';
@@ -67,17 +76,22 @@ function ActiveSession({ session }: { session: Session }) {
   const exercise = entry ? exerciseById(entry.exerciseId) : undefined;
   const target = entry?.target ?? (entry ? { exerciseId: entry.exerciseId, ...DEFAULT_TARGET } : undefined);
 
-  // "Last time" means the last time before this workout's date, so a back-dated
-  // workout builds on what came before it rather than on later sessions.
-  const prev = useMemo(
-    () => (entry ? previousPerformance(data.sessions, entry.exerciseId, session.id, { before: session }) : null),
-    [data.sessions, entry, session],
-  );
-  // The same goal the last workout's report set: it builds on the last normal
-  // session, so a deload week doesn't reset progress.
+  // "Last time" looks back from this workout's date, so a back-dated workout
+  // builds on what came before it rather than on later sessions. It's the
+  // workout this one is measured against (the last normal one with the same
+  // rep range), so it agrees with the target and the report; failing that,
+  // simply the latest one.
+  const prev = useMemo(() => {
+    if (!entry || !target) return null;
+    return (
+      comparisonPerformance(data.sessions, entry.exerciseId, target, { excludeId: session.id, before: session }) ??
+      previousPerformance(data.sessions, entry.exerciseId, session.id, { before: session })
+    );
+  }, [data.sessions, entry, session, target]);
+  // The same goal the last workout's report set, so a deload week doesn't reset progress.
   const suggestion = useMemo(
-    () => (entry && target ? sessionTarget(data.sessions, session, entry.exerciseId, target, target.progression ?? session.progression) : null),
-    [data.sessions, entry, session, target],
+    () => (entry && target ? sessionTarget(data.sessions, session, entry.exerciseId, target, target.progression ?? session.progression, unit) : null),
+    [data.sessions, entry, session, target, unit],
   );
 
   const setSets = (fn: (sets: LoggedSet[]) => LoggedSet[]) =>
@@ -104,7 +118,8 @@ function ActiveSession({ session }: { session: Session }) {
     const set = entry!.sets[k];
     if (set.done) return patchSet(k, { done: false });
     const ph = placeholderFor(k);
-    const weight = set.weight ?? ph?.weight ?? null;
+    // Save an accepted placeholder as the weight it shows, so it compares the same as one typed in.
+    const weight = set.weight ?? (ph ? fromDisplay(toDisplay(ph.weight, unit), unit) : null);
     const reps = set.reps ?? ph?.reps ?? null;
     if (weight == null || reps == null) return;
     patchSet(k, { weight, reps, done: true });

@@ -7,7 +7,9 @@ import type {
   SessionEntry,
   SetValue,
   TemplateExercise,
+  Unit,
 } from './types';
+import { fromDisplay, toDisplay } from './units';
 
 /* ---------- Sets and volume ---------- */
 
@@ -84,18 +86,23 @@ export interface Previous {
   sets: SetValue[];
 }
 
+/** Sets and reps for an exercise added outside a workout template. */
+export const DEFAULT_TARGET: Omit<TemplateExercise, 'exerciseId'> = { sets: 3, repMin: 8, repMax: 12, restSec: 120 };
+
+export type RepRange = Pick<TemplateExercise, 'repMin' | 'repMax'>;
+
 /**
  * The working sets from the most recent finished session (other than
  * `excludeId`) that included this exercise. Pass `before` to look back from a
  * point on the timeline, such as a workout being logged for an earlier date,
- * so later sessions are ignored. Targets pass `skipDeload` so a lighter
- * deload week doesn't reset progression.
+ * so later sessions are ignored. `skipDeload` passes over lighter deload
+ * weeks, and `range` only accepts sessions that used that rep range.
  */
 export function previousPerformance(
   sessions: Session[],
   exerciseId: string,
   excludeId?: string,
-  opts: { skipDeload?: boolean; before?: TimelinePoint } = {},
+  opts: { skipDeload?: boolean; before?: TimelinePoint; range?: RepRange } = {},
 ): Previous | null {
   const done = finishedSessions(sessions);
   for (let i = done.length - 1; i >= 0; i--) {
@@ -104,10 +111,27 @@ export function previousPerformance(
     if (opts.before && compareTimeline(s, opts.before) >= 0) continue;
     const entry = s.entries.find((e) => e.exerciseId === exerciseId);
     if (!entry) continue;
+    const used = entry.target ?? DEFAULT_TARGET;
+    if (opts.range && (used.repMin !== opts.range.repMin || used.repMax !== opts.range.repMax)) continue;
     const sets = workingSets(entry.sets);
     if (sets.length) return { session: s, sets };
   }
   return null;
+}
+
+/**
+ * The workout an exercise is measured against: the last normal (non-deload)
+ * finished workout with it, with the same rep range, before `before` when
+ * given. A deload is lighter on purpose, and a heavy day and a light day of
+ * the same lift each build on their own history.
+ */
+export function comparisonPerformance(
+  sessions: Session[],
+  exerciseId: string,
+  range: RepRange,
+  opts: { excludeId?: string; before?: TimelinePoint } = {},
+): Previous | null {
+  return previousPerformance(sessions, exerciseId, opts.excludeId, { skipDeload: true, before: opts.before, range });
 }
 
 export interface ExerciseHistoryPoint {
@@ -134,6 +158,19 @@ export function exerciseHistory(sessions: Session[], exerciseId: string): Exerci
 
 const EPS = 0.01;
 
+/**
+ * A weight as the user sees it (to 0.1 lb or 0.5 kg), back in lb. Two sets
+ * that look the same then compare equal, even when one was typed in kg and
+ * the other came from a lb goal.
+ */
+function snap(lb: number, unit: Unit): number {
+  return fromDisplay(toDisplay(lb, unit), unit);
+}
+
+function snapSets(sets: SetValue[], unit: Unit): SetValue[] {
+  return sets.map((s) => ({ ...s, weight: snap(s.weight, unit) }));
+}
+
 function topWeight(sets: SetValue[]): number {
   return Math.max(...sets.map((s) => s.weight));
 }
@@ -142,18 +179,24 @@ function repsAtOrAbove(sets: SetValue[], weight: number): number {
   return sets.reduce((n, s) => (s.weight >= weight - EPS ? n + s.reps : n), 0);
 }
 
+function setsAtOrAbove(sets: SetValue[], weight: number): number {
+  return sets.filter((s) => s.weight >= weight - EPS).length;
+}
+
 function setsVolume(sets: SetValue[]): number {
   return sets.reduce((v, s) => v + setVolume(s), 0);
 }
 
-/** Why a workout did or didn't overload an exercise. Weights are in lb. */
+/** Why a workout did or didn't overload an exercise. Weights and volume are in lb. */
 export type OverloadReason =
   | { kind: 'heavier'; weight: number }
   | { kind: 'more-reps'; weight: number; reps: number }
   | { kind: 'more-volume'; volume: number }
   | { kind: 'too-heavy'; weight: number; reps: number; repMin: number }
+  | { kind: 'fewer-sets'; weight: number; sets: number; previous: number }
   | { kind: 'lighter'; weight: number; previous: number }
   | { kind: 'fewer-reps'; weight: number; reps: number }
+  | { kind: 'less-volume'; volume: number }
   | { kind: 'matched' };
 
 export interface OverloadVerdict {
@@ -163,27 +206,39 @@ export interface OverloadVerdict {
 
 /**
  * Whether `now` progressively overloaded `prev`, the same exercise's working
- * sets from the previous workout. It counts when the top weight went up (and
- * the best set there still reached the bottom of the rep range, or the reps at
- * the old weight held), when there were more reps at the same top weight, or
- * when the top-weight work matched and total volume went up (an extra set).
- * Lighter, fewer reps, or an exact repeat is a miss.
+ * sets from the workout it's measured against. Weights are compared as they
+ * show in `unit`.
+ *
+ * A heavier top weight counts when the reps at last time's top weight or
+ * above held, or when the heaviest set still reached the bottom of the rep
+ * range without dropping sets at that weight (one heavier set after three
+ * normal ones is not an overload). At the same top weight, more reps there
+ * count, and with the same reps, more volume from lighter sets counts.
+ * Anything lighter, fewer, or an exact repeat is a miss.
  */
-export function overloadVerdict(now: SetValue[], prev: SetValue[], repMin: number): OverloadVerdict {
+export function overloadVerdict(nowSets: SetValue[], prevSets: SetValue[], repMin: number, unit: Unit = 'lb'): OverloadVerdict {
+  const now = snapSets(nowSets, unit);
+  const prev = snapSets(prevSets, unit);
   const w = topWeight(now);
   const p = topWeight(prev);
   const repsNow = repsAtOrAbove(now, p);
   const repsPrev = repsAtOrAbove(prev, p);
   if (w > p + EPS) {
+    const heavier: OverloadVerdict = { overloaded: true, reason: { kind: 'heavier', weight: w } };
+    if (repsNow >= repsPrev) return heavier;
     const best = Math.max(...now.filter((s) => s.weight >= w - EPS).map((s) => s.reps));
-    if (repsNow >= repsPrev || best >= repMin) return { overloaded: true, reason: { kind: 'heavier', weight: w } };
-    return { overloaded: false, reason: { kind: 'too-heavy', weight: w, reps: best, repMin } };
+    if (best < repMin) return { overloaded: false, reason: { kind: 'too-heavy', weight: w, reps: best, repMin } };
+    const setsNow = setsAtOrAbove(now, p);
+    const setsPrev = setsAtOrAbove(prev, p);
+    if (setsNow < setsPrev) return { overloaded: false, reason: { kind: 'fewer-sets', weight: p, sets: setsNow, previous: setsPrev } };
+    return heavier;
   }
   if (w < p - EPS) return { overloaded: false, reason: { kind: 'lighter', weight: w, previous: p } };
   if (repsNow > repsPrev) return { overloaded: true, reason: { kind: 'more-reps', weight: w, reps: repsNow - repsPrev } };
   if (repsNow < repsPrev) return { overloaded: false, reason: { kind: 'fewer-reps', weight: w, reps: repsPrev - repsNow } };
   const extra = setsVolume(now) - setsVolume(prev);
   if (extra > EPS) return { overloaded: true, reason: { kind: 'more-volume', volume: extra } };
+  if (extra < -EPS) return { overloaded: false, reason: { kind: 'less-volume', volume: -extra } };
   return { overloaded: false, reason: { kind: 'matched' } };
 }
 
@@ -191,19 +246,17 @@ export function overloadVerdict(now: SetValue[], prev: SetValue[], repMin: numbe
 
 export const DEFAULT_INCREMENT_LB = 5;
 
-/** Sets and reps for an exercise added outside a workout template. */
-export const DEFAULT_TARGET: Omit<TemplateExercise, 'exerciseId'> = { sets: 3, repMin: 8, repMax: 12, restSec: 120 };
-
 /**
  * How a goal was set, so screens can explain it:
  * - add-reps: one more rep per set (double progression after an overload)
  * - top-of-range: every set hit the top of the rep range, so add weight and go back to the bottom
  * - one-more-rep: last time wasn't an overload, so aim for the smallest step that is one
+ * - finish-sets: last time had fewer sets than planned, so do them all at the same numbers
  * - add-weight: linear progression with every rep done
  * - repeat-weight: linear progression with reps missed, so finish them before adding weight
  * - deload: a planned lighter week
  */
-export type GoalKind = 'add-reps' | 'top-of-range' | 'one-more-rep' | 'add-weight' | 'repeat-weight' | 'deload';
+export type GoalKind = 'add-reps' | 'top-of-range' | 'one-more-rep' | 'finish-sets' | 'add-weight' | 'repeat-weight' | 'deload';
 
 export interface Target {
   sets: SetValue[];
@@ -219,55 +272,72 @@ function roundPlate(lb: number): number {
 
 /**
  * The goal for the next workout, built from `last` (the latest normal,
- * non-deload workout's working sets) and `before` (the one before that), which
- * says whether `last` was an overload.
+ * non-deload workout's working sets) and `before` (the one it was measured
+ * against), which says whether `last` was an overload. Every goal except a
+ * deload is an overload of `last` when followed exactly.
  *
- * Double progression: after an overload, or the first time, add one rep per
- * set; once every set reaches the top of the rep range, add weight and drop to
- * the bottom of the range. After a miss, the goal is the smallest step that
- * counts as an overload: one more rep on the weakest set at the same weight.
- * Linear: add weight when every rep was done, otherwise repeat the weight and
- * finish the reps first.
+ * Double progression: once every planned set reaches the top of the rep
+ * range, add weight and drop to the bottom of the range. With planned sets
+ * skipped, do them all at the same numbers, which is already more work. After
+ * an overload, or the first time, add one rep per set; after a miss, take the
+ * smallest step that counts: one more rep on the weakest set. Linear: add
+ * weight when every rep was done, otherwise repeat the top weight and finish
+ * the reps first.
  */
 export function nextTarget(
-  last: SetValue[] | null,
-  before: SetValue[] | null,
+  lastSets: SetValue[] | null,
+  beforeSets: SetValue[] | null,
   te: Pick<TemplateExercise, 'sets' | 'repMin' | 'repMax'>,
   style: ProgressionStyle,
-  opts: { deload?: boolean; increment?: number } = {},
+  opts: { deload?: boolean; increment?: number; unit?: Unit } = {},
 ): Target | null {
-  if (!last || last.length === 0) return null;
+  if (!lastSets || lastSets.length === 0) return null;
+  const unit = opts.unit ?? 'lb';
+  const last = snapSets(lastSets, unit);
   const inc = opts.increment ?? DEFAULT_INCREMENT_LB;
   const top = topWeight(last);
-  // Keep any extra sets from last time, so following the goal never means doing less.
-  const count = Math.max(te.sets, last.length, 1);
-  const goal = (fn: (s: SetValue) => SetValue) => Array.from({ length: count }, (_, i) => fn(last[Math.min(i, last.length - 1)]));
   const atTop = (s: SetValue) => s.weight >= top - EPS;
+  // Fill in planned sets that were skipped, and keep any extra ones, so following the goal never means doing less.
+  const count = Math.max(te.sets, last.length);
+  const goal = (fn: (s: SetValue) => SetValue) => Array.from({ length: count }, (_, i) => fn(last[Math.min(i, last.length - 1)]));
 
   if (opts.deload) {
-    const w = roundPlate(top * 0.9);
+    const w = snap(roundPlate(top * 0.9), unit);
     return { kind: 'deload', increment: 0, sets: goal((s) => ({ weight: w, reps: Math.min(s.reps, te.repMax) })) };
   }
 
   if (style === 'linear') {
     const topSets = last.filter(atTop);
     if (topSets.length >= te.sets && topSets.every((s) => s.reps >= te.repMin)) {
-      return { kind: 'add-weight', increment: inc, sets: goal((s) => ({ weight: s.weight + inc, reps: Math.min(Math.max(s.reps, te.repMin), te.repMax) })) };
+      return {
+        kind: 'add-weight',
+        increment: inc,
+        sets: goal((s) => ({ weight: snap(s.weight + inc, unit), reps: Math.min(Math.max(s.reps, te.repMin), te.repMax) })),
+      };
     }
-    return { kind: 'repeat-weight', increment: 0, sets: goal((s) => ({ weight: s.weight, reps: Math.min(Math.max(s.reps, te.repMin), te.repMax) })) };
+    // Every planned set at the top weight, with no set below the bottom of the range.
+    const sets = Array.from({ length: Math.max(te.sets, topSets.length) }, (_, i) => ({
+      weight: top,
+      reps: Math.max(topSets[i]?.reps ?? 0, te.repMin),
+    }));
+    return { kind: 'repeat-weight', increment: 0, sets };
   }
 
   if (last.length >= te.sets && last.every((s) => s.reps >= te.repMax)) {
-    return { kind: 'top-of-range', increment: inc, sets: goal((s) => ({ weight: s.weight + inc, reps: te.repMin })) };
+    return { kind: 'top-of-range', increment: inc, sets: goal((s) => ({ weight: snap(s.weight + inc, unit), reps: te.repMin })) };
   }
 
-  const verdict = before && before.length > 0 ? overloadVerdict(last, before, te.repMin) : null;
+  if (last.length < te.sets) return { kind: 'finish-sets', increment: 0, sets: goal((s) => ({ ...s })) };
+
+  const verdict = beforeSets && beforeSets.length > 0 ? overloadVerdict(last, beforeSets, te.repMin, unit) : null;
   if (!verdict || verdict.overloaded) {
-    return { kind: 'add-reps', increment: 0, sets: goal((s) => ({ weight: s.weight, reps: Math.min(te.repMax, Math.max(te.repMin, s.reps + 1)) })) };
+    // A set already at or past the top of the range keeps its reps.
+    return { kind: 'add-reps', increment: 0, sets: goal((s) => ({ weight: s.weight, reps: s.reps < te.repMax ? s.reps + 1 : s.reps })) };
   }
 
-  // A miss: one more rep on the weakest set with room to grow, preferring sets at the top weight.
-  const sets = goal((s) => ({ weight: s.weight, reps: Math.min(s.reps, te.repMax) }));
+  // A miss: one more rep on the weakest set below the top of the range, preferring the top weight.
+  // One always exists here: if every set had reached it, the goal would be top-of-range.
+  const sets = goal((s) => ({ ...s }));
   const weakest = (pick: (s: SetValue) => boolean) =>
     sets.reduce((best, s, i) => (pick(s) && s.reps < te.repMax && (best < 0 || s.reps < sets[best].reps) ? i : best), -1);
   const i = weakest(atTop) >= 0 ? weakest(atTop) : weakest(() => true);
@@ -275,66 +345,114 @@ export function nextTarget(
   return { kind: 'one-more-rep', increment: 0, sets };
 }
 
+type Scheme = Pick<TemplateExercise, 'sets' | 'repMin' | 'repMax'>;
+
+/** The goal for the workout after `last`, judged against the workout `last` was measured against. */
+function goalAfter(
+  sessions: Session[],
+  exerciseId: string,
+  last: Previous | null,
+  te: Scheme,
+  style: ProgressionStyle,
+  opts: { deload?: boolean; unit?: Unit },
+): Target | null {
+  const before = last ? comparisonPerformance(sessions, exerciseId, te, { excludeId: last.session.id, before: last.session }) : null;
+  return nextTarget(last?.sets ?? null, before?.sets ?? null, te, style, opts);
+}
+
 /**
- * The goal while logging `exerciseId` in `session`: built from the last normal
- * workouts with that exercise before this one, the same way the post-workout
- * report sets the next goal.
+ * The goal while logging `exerciseId` in `session`: built from the workout
+ * it's measured against, the same way the post-workout report sets the next
+ * goal.
  */
 export function sessionTarget(
   sessions: Session[],
   session: Session,
   exerciseId: string,
-  te: Pick<TemplateExercise, 'sets' | 'repMin' | 'repMax'>,
+  te: Scheme,
   style: ProgressionStyle,
+  unit: Unit = 'lb',
 ): Target | null {
-  const last = previousPerformance(sessions, exerciseId, session.id, { skipDeload: true, before: session });
-  const before = last ? previousPerformance(sessions, exerciseId, session.id, { skipDeload: true, before: last.session }) : null;
-  return nextTarget(last?.sets ?? null, before?.sets ?? null, te, style, { deload: session.deload });
+  const last = comparisonPerformance(sessions, exerciseId, te, { excludeId: session.id, before: session });
+  return goalAfter(sessions, exerciseId, last, te, style, { deload: session.deload, unit });
 }
 
 /* ---------- Post-workout report ---------- */
 
-export type OverloadStatus = 'overloaded' | 'missed' | 'first' | 'deload';
+/**
+ * - overloaded / missed: judged against the workout it's measured against
+ * - first: no earlier normal workout with this exercise
+ * - new-range: done before, but never with this rep range
+ * - deload: lighter on purpose, so not judged
+ */
+export type OverloadStatus = 'overloaded' | 'missed' | 'first' | 'new-range' | 'deload';
 
 export interface ExerciseReport {
   exerciseId: string;
   sets: SetValue[];
   volume: number;
-  /** The last normal (non-deload) workout with this exercise before this one. */
+  /** The sets and rep range this workout used for the exercise. */
+  scheme: Scheme;
+  /** The workout it's measured against: the last normal one with the same rep range. */
   previous: Previous | null;
   status: OverloadStatus;
   reason: OverloadReason | null;
-  /** The goal for the next normal workout with this exercise. */
+  /** The goal for the next normal workout with this exercise and rep range. */
   goal: Target | null;
+  /**
+   * The workout the goal builds on when it isn't this one: the last normal
+   * workout after a deload, or a later workout when this one was logged
+   * after the fact.
+   */
+  goalFrom: Session | null;
 }
 
 /**
  * For each exercise in a finished workout: whether it progressively overloaded
- * the previous normal workout with that exercise, and the goal for next time.
- * A deload workout isn't judged, and its goal still builds on the last normal one.
+ * the workout it's measured against, and the goal for next time. The goal
+ * builds on the latest normal workout with that exercise, so it matches the
+ * target the next workout shows.
  */
-export function workoutReport(sessions: Session[], session: Session): ExerciseReport[] {
+export function workoutReport(sessions: Session[], session: Session, unit: Unit = 'lb'): ExerciseReport[] {
   const out: ExerciseReport[] = [];
   for (const entry of session.entries) {
     const sets = workingSets(entry.sets);
     if (sets.length === 0) continue;
     const te = entry.target ?? DEFAULT_TARGET;
+    const scheme = { sets: te.sets, repMin: te.repMin, repMax: te.repMax };
     const style = entry.target?.progression ?? session.progression;
-    const previous = previousPerformance(sessions, entry.exerciseId, session.id, { skipDeload: true, before: session });
-    const base = { exerciseId: entry.exerciseId, sets, volume: setsVolume(sets), previous };
-    if (session.deload) {
-      const earlier = previous
-        ? previousPerformance(sessions, entry.exerciseId, session.id, { skipDeload: true, before: previous.session })
-        : null;
-      out.push({ ...base, status: 'deload', reason: null, goal: nextTarget(previous?.sets ?? null, earlier?.sets ?? null, te, style) });
-      continue;
+    const previous = comparisonPerformance(sessions, entry.exerciseId, te, { excludeId: session.id, before: session });
+
+    let status: OverloadStatus;
+    let reason: OverloadReason | null = null;
+    if (session.deload) status = 'deload';
+    else if (previous) {
+      const verdict = overloadVerdict(sets, previous.sets, te.repMin, unit);
+      status = verdict.overloaded ? 'overloaded' : 'missed';
+      reason = verdict.reason;
+    } else {
+      const other = previousPerformance(sessions, entry.exerciseId, session.id, { skipDeload: true, before: session });
+      status = other ? 'new-range' : 'first';
     }
-    const verdict = previous ? overloadVerdict(sets, previous.sets, te.repMin) : null;
+
+    // The next workout builds on the latest normal one with this exercise: this
+    // one, unless it's a deload or a later workout was logged before it.
+    const latest = comparisonPerformance(sessions, entry.exerciseId, te, { excludeId: session.id });
+    const fromHere = !session.deload && (!latest || compareTimeline(latest.session, session) < 0);
+    const goal = fromHere
+      ? nextTarget(sets, previous?.sets ?? null, te, style, { unit })
+      : goalAfter(sessions, entry.exerciseId, latest, te, style, { unit });
+
     out.push({
-      ...base,
-      status: verdict ? (verdict.overloaded ? 'overloaded' : 'missed') : 'first',
-      reason: verdict?.reason ?? null,
-      goal: nextTarget(sets, previous?.sets ?? null, te, style),
+      exerciseId: entry.exerciseId,
+      sets,
+      volume: setsVolume(sets),
+      scheme,
+      previous,
+      status,
+      reason,
+      goal,
+      goalFrom: fromHere ? null : (latest?.session ?? null),
     });
   }
   return out;
