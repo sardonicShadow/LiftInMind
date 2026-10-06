@@ -1,5 +1,5 @@
 import { router } from 'expo-router';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Pressable, StyleSheet, View } from 'react-native';
 import Svg, { Circle } from 'react-native-svg';
 
@@ -11,6 +11,7 @@ import { formatVolume, formatWeight } from '@/lib/units';
 import { Button, Card, Chip, Divider, EmptyState, IconButton, Row, Screen, T } from '@/ui/components';
 import { Icon } from '@/ui/icons';
 import { colors, fonts } from '@/ui/theme';
+import { useToday } from '@/ui/useToday';
 
 function Ring({ done, total }: { done: number; total: number }) {
   const r = 18;
@@ -37,9 +38,18 @@ function Ring({ done, total }: { done: number; total: number }) {
 export default function WeekScreen() {
   const store = useStore();
   const { data, activePlan, activeSession, exerciseById } = store;
-  const todayISO = today();
-  const [weekStart, setWeekStart] = useState(mondayOf(todayISO));
-  const [selected, setSelected] = useState(todayISO);
+  const todayISO = useToday();
+  // The day and week follow today until the user picks something else.
+  const [pickedDay, setSelected] = useState<string | null>(null);
+  const [pickedWeek, setWeekStart] = useState<string | null>(null);
+  const selected = pickedDay ?? todayISO;
+  const weekStart = pickedWeek ?? mondayOf(todayISO);
+  // When the day rolls over (say the app sat open overnight), go back to today
+  // so a new workout isn't logged on yesterday by accident.
+  useEffect(() => {
+    setSelected(null);
+    setWeekStart(null);
+  }, [todayISO]);
   const dates = weekDates(weekStart);
 
   const finished = useMemo(() => finishedSessions(data.sessions), [data.sessions]);
@@ -82,7 +92,7 @@ export default function WeekScreen() {
   const showReportBanner = dayOfMonth(todayISO) <= 7 && finished.some((s) => monthKey(s.date) === lastMonth);
 
   const start = (templateId: string | null) => {
-    store.startSession(templateId, selected);
+    store.startSession(templateId, pickedDay ?? today());
     router.push('/session');
   };
 

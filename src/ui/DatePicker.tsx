@@ -55,8 +55,10 @@ export function DatePicker({
 
   return (
     <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose}>
-      <Pressable style={styles.backdrop} onPress={onClose} accessibilityLabel="Close date picker">
-        <Pressable onPress={() => {}} style={styles.sheetWrap}>
+      <View style={styles.backdrop}>
+        {/* A sibling behind the sheet, not a wrapper, so screen readers can still reach the calendar. */}
+        <Pressable style={StyleSheet.absoluteFill} onPress={onClose} accessibilityLabel="Close date picker" />
+        <View style={styles.sheetWrap}>
           <SafeAreaView edges={['bottom']} style={styles.sheet}>
             <View style={styles.grabber} />
             <Row style={{ justifyContent: 'space-between' }}>
@@ -116,8 +118,8 @@ export function DatePicker({
 
             <Button title="Today" variant="secondary" size="medium" disabled={value === todayISO} onPress={() => pick(todayISO)} />
           </SafeAreaView>
-        </Pressable>
-      </Pressable>
+        </View>
+      </View>
     </Modal>
   );
 }

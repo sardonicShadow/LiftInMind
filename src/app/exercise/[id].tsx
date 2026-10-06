@@ -2,7 +2,7 @@ import { router, useLocalSearchParams } from 'expo-router';
 import { Pressable, View } from 'react-native';
 
 import { EQUIPMENT_LABEL } from '@/lib/catalog';
-import { shortDate } from '@/lib/dates';
+import { shortDate, today } from '@/lib/dates';
 import { e1rm, exerciseHistory } from '@/lib/logic';
 import { useStore } from '@/lib/store';
 import { formatVolume, formatWeight, toDisplay } from '@/lib/units';
@@ -22,7 +22,9 @@ export default function ExerciseDetail() {
     );
   }
   const history = exerciseHistory(data.sessions, exercise.id);
-  const last = history.at(-1);
+  // Like the Exercises list, "Last time" ignores workouts dated after today.
+  const todayISO = today();
+  const last = history.filter((h) => h.session.date <= todayISO).at(-1) ?? history.at(-1);
   const best = history.reduce<(typeof history)[number] | null>((b, h) => (!b || e1rm(h.best) > e1rm(b.best) ? h : b), null);
   const recent = history.slice(-12);
   const maxVol = Math.max(1, ...recent.map((h) => h.volume));

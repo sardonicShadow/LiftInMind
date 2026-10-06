@@ -3,7 +3,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Pressable, StyleSheet, View } from 'react-native';
 
 import { EQUIPMENT_LABEL } from '@/lib/catalog';
-import { shortDate, today } from '@/lib/dates';
+import { shortDate, toISODate, today } from '@/lib/dates';
 import { compareSet, entryVolume, finishedSessions, previousPerformance, sessionVolume, suggestTarget } from '@/lib/logic';
 import { DEFAULT_TARGET, useStore } from '@/lib/store';
 import type { LoggedSet, Session, SessionEntry, SetValue } from '@/lib/types';
@@ -55,8 +55,10 @@ function ActiveSession({ session }: { session: Session }) {
   const [restUntil, setRestUntil] = useState<number | null>(null);
   const [confirmDiscard, setConfirmDiscard] = useState(false);
   const [pickingDate, setPickingDate] = useState(false);
-  // Logging a workout after the fact: no live clock or rest timer.
-  const live = session.date === today();
+  // Only a workout dated the day it was started gets a live clock and rest timer,
+  // so one logged after the fact doesn't, and a late session keeps them past midnight.
+  const startDay = toISODate(new Date(session.startedAt));
+  const live = session.date === startDay;
   const workoutDays = useMemo(() => new Set(finishedSessions(data.sessions).map((s) => s.date)), [data.sessions]);
 
   const entry: SessionEntry | undefined = session.entries[Math.min(index, session.entries.length - 1)];
@@ -163,7 +165,7 @@ function ActiveSession({ session }: { session: Session }) {
             style={({ pressed }) => [styles.dateBtn, pressed && { opacity: 0.7 }]}>
             <Icon name="calendar" size={14} color={colors.accent} strokeWidth={2} />
             <T variant="small" color={colors.accent} style={{ fontFamily: fonts.semibold }}>
-              {live ? 'Today' : shortDate(session.date)}
+              {session.date === today() ? 'Today' : shortDate(session.date)}
             </T>
             <T variant="small">{`${live ? ` · ${clock(now - session.startedAt)}` : ''}${session.deload ? ' · Deload' : ''}`}</T>
           </Pressable>
@@ -419,7 +421,7 @@ function ActiveSession({ session }: { session: Session }) {
         onClose={() => setPickingDate(false)}
         onPick={(d) => {
           setSessionDate(session.id, d);
-          if (d !== today()) setRestUntil(null);
+          if (d !== startDay) setRestUntil(null);
         }}
       />
 

@@ -253,8 +253,16 @@ describe('planLink', () => {
     expect(planLink(plan, 'push', '2026-09-07')).toEqual({ planId: 'p', deload: false });
     expect(planLink(plan, 'push', '2026-09-08')).toEqual({ planId: null, deload: false });
     expect(planLink(plan, 'push', '2026-09-21')).toEqual({ planId: 'p', deload: true });
+    expect(planLink(plan, 'push', '2026-10-26')).toEqual({ planId: null, deload: false });
     expect(planLink(plan, null, '2026-09-07')).toEqual({ planId: null, deload: false });
     expect(planLink(null, 'push', '2026-09-07')).toEqual({ planId: null, deload: false });
+  });
+
+  it('keeps the deload flag for a plan workout moved to another day of a deload week', () => {
+    // Week 3 (Sept 21-27) is a deload week; Wednesday has no scheduled workout.
+    expect(planLink(plan, 'push', '2026-09-23')).toEqual({ planId: null, deload: true });
+    expect(planLink(plan, 'other', '2026-09-23')).toEqual({ planId: null, deload: false });
+    expect(planLink(plan, 'push', '2026-09-16')).toEqual({ planId: null, deload: false });
   });
 });
 

@@ -219,13 +219,18 @@ export function planDay(plan: Plan, date: string): PlanDay | null {
 }
 
 /**
- * Whether a workout of `templateId` on `date` is the active plan's workout for
- * that day, and if so whether it falls in a deload week.
+ * Links a workout of `templateId` on `date` to `plan`. It is on the plan when
+ * it is that day's scheduled workout. Any of the plan's workouts done during a
+ * deload week counts as a deload, even on another weekday, so moving a light
+ * session to a different day doesn't turn it into the base for new targets.
  */
 export function planLink(plan: Plan | null, templateId: string | null, date: string): { planId: string | null; deload: boolean } {
   const day = plan ? planDay(plan, date) : null;
-  if (!plan || !day || templateId == null || day.templateId !== templateId) return { planId: null, deload: false };
-  return { planId: plan.id, deload: day.deload };
+  if (!plan || !day || templateId == null) return { planId: null, deload: false };
+  return {
+    planId: day.templateId === templateId ? plan.id : null,
+    deload: day.deload && plan.days.includes(templateId),
+  };
 }
 
 export function plannedSessionsInRange(plan: Plan, dates: string[]): number {
