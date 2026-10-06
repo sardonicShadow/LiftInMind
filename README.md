@@ -21,7 +21,7 @@ Other scripts:
 | `npm run typecheck` | TypeScript check |
 | `npm run build:web` | Static site in `dist/`, ready for any static host |
 
-To try it on a phone, deploy it on Vercel: import this repo at vercel.com and it picks up `vercel.json` (build with `npm run build:web`, serve `dist/`, send every route to `index.html`). Every push to `main` updates the site, and every pull request gets its own preview link. Open the link in Safari or Chrome on your phone. Use **Share → Add to Home Screen** to get a full-screen app icon. Routes are client-side, so the host should fall back to `index.html` for unknown paths.
+To try it on a phone, use GitHub Pages: in the repo's **Settings → Pages**, set **Source** to **GitHub Actions**. Every push to `main` then builds and deploys the app to https://sardonicshadow.github.io/LiftInMind/ (`.github/workflows/pages.yml`). Open the link in Safari or Chrome on your phone and use **Share → Add to Home Screen** for a full-screen app icon. `vercel.json` also works if you'd rather host on Vercel.
 
 ## What's in the proof of concept
 
