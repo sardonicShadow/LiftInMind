@@ -3,7 +3,8 @@ import { useState } from 'react';
 import { Pressable, View } from 'react-native';
 
 import { EQUIPMENT_LABEL } from '@/lib/catalog';
-import { DEFAULT_TARGET, newId, useStore } from '@/lib/store';
+import { DEFAULT_TARGET } from '@/lib/logic';
+import { newId, useStore } from '@/lib/store';
 import type { ProgressionStyle, TemplateExercise, WorkoutTemplate } from '@/lib/types';
 import { Button, Card, Chip, Field, Header, IconButton, Row, Screen, Stepper, T } from '@/ui/components';
 import { ExercisePicker } from '@/ui/ExercisePicker';

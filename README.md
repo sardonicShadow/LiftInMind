@@ -30,7 +30,8 @@ To try it on a phone, use GitHub Pages: in the repo's **Settings → Pages**, se
 - **Plans**: a weekly schedule over N weeks, optional deload week, and double (default) or linear progression.
 - **Week calendar**: the plan's days, what's done, and each day's workout with last time's numbers. Tap any day, past or future, to log a workout for it. A workout's date can also be changed while logging it or from its summary, and "last time" and targets always come from sessions before that date.
 - **Live logging**: a "Last time" strip, previous sets in every row, a progression target, warm-up sets (logged but never counted), a rest timer, and live exercise and session volume.
-- **Session summary**: total volume vs the last time you did that workout, volume per exercise, and new bests.
+- **Workout report**: pops up when you finish a workout. Each exercise gets a green check if you progressively overloaded it (more weight, more reps at the same weight, or an extra set) compared with the last time you did it with the same rep range, or a red X if you didn't, plus a goal for next time. After a check the goal keeps climbing (one more rep per set, or more weight once every set tops the rep range). After an X it's the smallest step that counts: one more rep on your weakest set. Skipped sets come first: the goal is to do them all. Every goal earns a check when you hit it exactly. Deload weeks aren't judged and don't change goals, and the next workout's target is the same goal.
+- **Session summary**: total volume vs the last time you did that workout, volume per exercise with its check or X, new bests, and the workout report again.
 - **Exercise history**: best set, estimated 1RM, and volume per session.
 - **Monthly report**: a Progressed, Maintained or Regressed verdict per exercise, plus stalls that last two months.
 - **Units**: lb by default, kg in settings.

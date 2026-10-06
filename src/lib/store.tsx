@@ -4,7 +4,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import { CATALOG } from './catalog';
 import { today } from './dates';
 import { buildSampleData } from './demo';
-import { planLink } from './logic';
+import { DEFAULT_TARGET, planLink } from './logic';
 import type { AppData, Exercise, Plan, Session, SessionEntry, TemplateExercise, Unit, WorkoutTemplate } from './types';
 
 const STORAGE_KEY = 'liftinmind:data:v1';
@@ -22,8 +22,6 @@ const EMPTY: AppData = {
 export function newId(): string {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 }
-
-export const DEFAULT_TARGET: Omit<TemplateExercise, 'exerciseId'> = { sets: 3, repMin: 8, repMax: 12, restSec: 120 };
 
 function entryFromTarget(t: TemplateExercise): SessionEntry {
   return {

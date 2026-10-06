@@ -1,4 +1,4 @@
-import type { Unit } from './types';
+import type { SetValue, Unit } from './types';
 
 const LB_PER_KG = 2.20462;
 
@@ -25,4 +25,12 @@ export function formatWeight(lb: number, unit: Unit): string {
 export function formatVolume(lb: number, unit: Unit): string {
   const v = unit === 'lb' ? lb : lb / LB_PER_KG;
   return `${Math.round(v).toLocaleString('en-US')} ${unit}`;
+}
+
+/** "135 lb × 10 · 10 · 9" when every set used the same weight, otherwise "135×10 · 125×12". */
+export function formatSets(sets: SetValue[], unit: Unit): string {
+  if (sets.length === 0) return '';
+  return sets.every((s) => toDisplay(s.weight, unit) === toDisplay(sets[0].weight, unit))
+    ? `${formatWeight(sets[0].weight, unit)} × ${sets.map((s) => s.reps).join(' · ')}`
+    : sets.map((s) => `${formatNumber(toDisplay(s.weight, unit))}×${s.reps}`).join(' · ');
 }

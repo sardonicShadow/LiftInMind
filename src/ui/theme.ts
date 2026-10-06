@@ -17,6 +17,11 @@ export const colors = {
   warn: '#FF9F43',
   warnSoft: '#3A2510',
   neutralSoft: '#25282D',
+  // Pass and fail marks in the workout report.
+  good: '#4ADE80',
+  goodSoft: '#14301F',
+  bad: '#FF6B6B',
+  badSoft: '#3A1A1C',
   neutralText: '#C4C9CF',
 };
 
