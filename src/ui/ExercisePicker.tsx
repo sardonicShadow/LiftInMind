@@ -3,8 +3,8 @@ import { FlatList, Modal, Pressable, ScrollView, StyleSheet, TextInput, View } f
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { EQUIPMENT_BADGE, EQUIPMENT_FILTERS, EQUIPMENT_LABEL, matchesEquipment, MUSCLES, searchMatches, type EquipmentFilter } from '@/lib/catalog';
-import { shortDate } from '@/lib/dates';
-import { finishedSessions, previousPerformance } from '@/lib/logic';
+import { shortDate, today } from '@/lib/dates';
+import { finishedSessions, previousPerformance, type TimelinePoint } from '@/lib/logic';
 import { useStore } from '@/lib/store';
 import type { Equipment, Exercise, Muscle } from '@/lib/types';
 import { formatWeight } from '@/lib/units';
@@ -115,10 +115,15 @@ export function ExerciseRow({
   );
 }
 
-export function useExerciseSubtitle() {
+/**
+ * "Last: …" line for an exercise, looking back from `before` (a workout being
+ * logged) when given, otherwise from today so future-dated workouts don't show.
+ */
+export function useExerciseSubtitle(before?: TimelinePoint) {
   const { data } = useStore();
+  const from = before ?? { date: today(), startedAt: Infinity };
   return (e: Exercise) => {
-    const prev = previousPerformance(data.sessions, e.id);
+    const prev = previousPerformance(data.sessions, e.id, undefined, { before: from });
     const base = `${EQUIPMENT_LABEL[e.equipment]} · ${e.muscle}`;
     if (!prev) return `${base} · Never done`;
     return `Last: ${formatWeight(prev.sets[0].weight, data.unit)} × ${prev.sets.map((s) => s.reps).join(' · ')} · ${shortDate(prev.session.date).slice(4)}`;
@@ -165,15 +170,18 @@ export function ExercisePicker({
   onClose,
   onPick,
   exclude = [],
+  before,
 }: {
   visible: boolean;
   onClose: () => void;
   onPick: (ids: string[]) => void;
   exclude?: string[];
+  /** The workout being logged, so "Last" lines only look at sessions before it. */
+  before?: TimelinePoint;
 }) {
   const { data, exerciseById } = useStore();
   const f = useCatalogFilter();
-  const subtitle = useExerciseSubtitle();
+  const subtitle = useExerciseSubtitle(before);
   const [picked, setPicked] = useState<string[]>([]);
   const [creating, setCreating] = useState(false);
 

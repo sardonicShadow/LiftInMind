@@ -28,7 +28,7 @@ To try it on a phone, use GitHub Pages: in the repo's **Settings → Pages**, se
 - **Exercise catalog**: about 110 machine, free weight, cable and bodyweight exercises, with search ("lat pull", "db row"), equipment and muscle filters, and custom exercises.
 - **Workouts**: sets, rep range, rest time and an optional per-exercise progression override.
 - **Plans**: a weekly schedule over N weeks, optional deload week, and double (default) or linear progression.
-- **Week calendar**: the plan's days, what's done, and today's workout with last time's numbers.
+- **Week calendar**: the plan's days, what's done, and each day's workout with last time's numbers. Tap any day, past or future, to log a workout for it. A workout's date can also be changed while logging it or from its summary, and "last time" and targets always come from sessions before that date.
 - **Live logging**: a "Last time" strip, previous sets in every row, a progression target, warm-up sets (logged but never counted), a rest timer, and live exercise and session volume.
 - **Session summary**: total volume vs the last time you did that workout, volume per exercise, and new bests.
 - **Exercise history**: best set, estimated 1RM, and volume per session.

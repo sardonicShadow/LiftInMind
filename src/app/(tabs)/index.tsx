@@ -1,5 +1,5 @@
 import { router } from 'expo-router';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Pressable, StyleSheet, View } from 'react-native';
 import Svg, { Circle } from 'react-native-svg';
 
@@ -11,6 +11,7 @@ import { formatVolume, formatWeight } from '@/lib/units';
 import { Button, Card, Chip, Divider, EmptyState, IconButton, Row, Screen, T } from '@/ui/components';
 import { Icon } from '@/ui/icons';
 import { colors, fonts } from '@/ui/theme';
+import { useToday } from '@/ui/useToday';
 
 function Ring({ done, total }: { done: number; total: number }) {
   const r = 18;
@@ -37,9 +38,18 @@ function Ring({ done, total }: { done: number; total: number }) {
 export default function WeekScreen() {
   const store = useStore();
   const { data, activePlan, activeSession, exerciseById } = store;
-  const todayISO = today();
-  const [weekStart, setWeekStart] = useState(mondayOf(todayISO));
-  const [selected, setSelected] = useState(todayISO);
+  const todayISO = useToday();
+  // The day and week follow today until the user picks something else.
+  const [pickedDay, setSelected] = useState<string | null>(null);
+  const [pickedWeek, setWeekStart] = useState<string | null>(null);
+  const selected = pickedDay ?? todayISO;
+  const weekStart = pickedWeek ?? mondayOf(todayISO);
+  // When the day rolls over (say the app sat open overnight), go back to today
+  // so a new workout isn't logged on yesterday by accident.
+  useEffect(() => {
+    setSelected(null);
+    setWeekStart(null);
+  }, [todayISO]);
   const dates = weekDates(weekStart);
 
   const finished = useMemo(() => finishedSessions(data.sessions), [data.sessions]);
@@ -62,6 +72,11 @@ export default function WeekScreen() {
   const selDay = activePlan ? planDay(activePlan, selected) : null;
   const selTemplate = templateById(selDay?.templateId ?? null);
   const selDone = sessionsOn(selected);
+  // The day's planned workout, until it has been logged.
+  const selPlanned = selTemplate && !selDone.some((s) => s.templateId === selTemplate.id) ? selTemplate : null;
+  const selLabel = selected === todayISO ? 'Today' : shortDate(selected);
+  // A workout logged now for the selected day goes after anything already logged that day.
+  const selPoint = { date: selected, startedAt: Infinity };
 
   // Next planned workout after the selected day.
   let next: { date: string; template: WorkoutTemplate } | null = null;
@@ -77,7 +92,7 @@ export default function WeekScreen() {
   const showReportBanner = dayOfMonth(todayISO) <= 7 && finished.some((s) => monthKey(s.date) === lastMonth);
 
   const start = (templateId: string | null) => {
-    store.startSession(templateId);
+    store.startSession(templateId, pickedDay ?? today());
     router.push('/session');
   };
 
@@ -179,81 +194,87 @@ export default function WeekScreen() {
       {activeSession ? (
         <Card style={{ borderWidth: 2, borderColor: colors.accent }}>
           <T variant="label" color={colors.accent}>
-            In progress
+            {activeSession.date === todayISO ? 'In progress' : `In progress · ${shortDate(activeSession.date)}`}
           </T>
           <T variant="h2">{activeSession.name}</T>
           <Button title="Resume workout" icon="play" onPress={() => router.push('/session')} />
         </Card>
-      ) : selDone.length > 0 ? (
-        selDone.map((s) => (
-          <Card key={s.id}>
-            <T variant="label" color={colors.accent}>
-              {`Done · ${shortDate(s.date)}`}
-            </T>
-            <T variant="h2">{s.name}</T>
-            <T variant="small">{`${formatVolume(sessionVolume(s), data.unit)} lifted · ${s.entries.length} exercise${s.entries.length === 1 ? '' : 's'}`}</T>
-            <Button title="View summary" size="medium" variant="secondary" onPress={() => router.push(`/summary/${s.id}`)} />
-          </Card>
-        ))
-      ) : selTemplate ? (
-        <Card>
-          <View style={{ gap: 4 }}>
-            <T variant="label" color={colors.accent}>
-              {selected === todayISO ? 'Today' : shortDate(selected)}
-              {selDay?.deload ? ' · Deload week' : ''}
-            </T>
-            <T variant="h2" style={{ fontSize: 30, lineHeight: 34 }}>
-              {selTemplate.name}
-            </T>
-            <T variant="small">{`${selTemplate.exercises.length} exercises · ${selTemplate.exercises.reduce((n, e) => n + e.sets, 0)} sets`}</T>
-          </View>
-          <View>
-            {selTemplate.exercises.slice(0, 3).map((te) => {
-              const prev = previousPerformance(data.sessions, te.exerciseId);
-              return (
-                <View key={te.exerciseId}>
-                  <Divider />
-                  <Row style={{ justifyContent: 'space-between', paddingVertical: 10 }}>
-                    <T style={{ flex: 1 }} numberOfLines={1}>
-                      {exerciseById(te.exerciseId)?.name ?? te.exerciseId}
-                    </T>
-                    <T variant="small" style={{ fontSize: 14 }}>
-                      {prev ? `Last ${formatWeight(prev.sets[0].weight, data.unit)} × ${prev.sets.map((x) => x.reps).join(' · ')}` : 'First time'}
-                    </T>
-                  </Row>
-                </View>
-              );
-            })}
-            {selTemplate.exercises.length > 3 ? (
-              <>
-                <Divider />
-                <T variant="small" style={{ paddingTop: 10 }}>{`+ ${selTemplate.exercises.length - 3} more`}</T>
-              </>
-            ) : null}
-          </View>
-          {selected === todayISO ? (
-            <Button title="Start workout" icon="play" onPress={() => start(selTemplate.id)} />
-          ) : selected < todayISO ? (
-            <T variant="small">Missed. You can still start it today from the Workouts tab.</T>
+      ) : (
+        <>
+          {selDone.map((s) => (
+            <Card key={s.id}>
+              <T variant="label" color={colors.accent}>
+                {`Done · ${shortDate(s.date)}`}
+              </T>
+              <T variant="h2">{s.name}</T>
+              <T variant="small">{`${formatVolume(sessionVolume(s), data.unit)} lifted · ${s.entries.length} exercise${s.entries.length === 1 ? '' : 's'}`}</T>
+              <Button title="View summary" size="medium" variant="secondary" onPress={() => router.push(`/summary/${s.id}`)} />
+            </Card>
+          ))}
+
+          {selPlanned ? (
+            <Card>
+              <View style={{ gap: 4 }}>
+                <T variant="label" color={colors.accent}>
+                  {selLabel}
+                  {selDay?.deload ? ' · Deload week' : ''}
+                </T>
+                <T variant="h2" style={{ fontSize: 30, lineHeight: 34 }}>
+                  {selPlanned.name}
+                </T>
+                <T variant="small">{`${selPlanned.exercises.length} exercises · ${selPlanned.exercises.reduce((n, e) => n + e.sets, 0)} sets`}</T>
+              </View>
+              <View>
+                {selPlanned.exercises.slice(0, 3).map((te) => {
+                  const prev = previousPerformance(data.sessions, te.exerciseId, undefined, { before: selPoint });
+                  return (
+                    <View key={te.exerciseId}>
+                      <Divider />
+                      <Row style={{ justifyContent: 'space-between', paddingVertical: 10 }}>
+                        <T style={{ flex: 1 }} numberOfLines={1}>
+                          {exerciseById(te.exerciseId)?.name ?? te.exerciseId}
+                        </T>
+                        <T variant="small" style={{ fontSize: 14 }}>
+                          {prev ? `Last ${formatWeight(prev.sets[0].weight, data.unit)} × ${prev.sets.map((x) => x.reps).join(' · ')}` : 'First time'}
+                        </T>
+                      </Row>
+                    </View>
+                  );
+                })}
+                {selPlanned.exercises.length > 3 ? (
+                  <>
+                    <Divider />
+                    <T variant="small" style={{ paddingTop: 10 }}>{`+ ${selPlanned.exercises.length - 3} more`}</T>
+                  </>
+                ) : null}
+              </View>
+              <Button title={selected === todayISO ? 'Start workout' : 'Log this workout'} icon="play" onPress={() => start(selPlanned.id)} />
+            </Card>
           ) : null}
-        </Card>
-      ) : !isEmpty ? (
-        <Card>
-          <T variant="label">{selected === todayISO ? 'Today' : shortDate(selected)}</T>
-          <T variant="h2">{selDay ? 'Rest day' : 'Nothing planned'}</T>
-          {selected === todayISO ? (
-            <>
-              <T variant="small">Start one of your workouts anyway:</T>
+
+          {!isEmpty ? (
+            <Card>
+              {selPlanned || selDone.length > 0 ? (
+                <T variant="label">{selDone.length > 0 ? 'Log another workout' : 'Or log a different workout'}</T>
+              ) : (
+                <>
+                  <T variant="label">{selLabel}</T>
+                  <T variant="h2">{selDay ? 'Rest day' : 'Nothing planned'}</T>
+                  <T variant="small">{selected === todayISO ? 'Start one of your workouts anyway:' : 'Log a workout for this day:'}</T>
+                </>
+              )}
               <Row style={{ flexWrap: 'wrap' }}>
-                {data.templates.map((t) => (
-                  <Chip key={t.id} label={t.name} onPress={() => start(t.id)} />
-                ))}
+                {data.templates
+                  .filter((t) => t.id !== selPlanned?.id && t.exercises.length > 0)
+                  .map((t) => (
+                    <Chip key={t.id} label={t.name} onPress={() => start(t.id)} />
+                  ))}
                 <Chip label="Empty workout" onPress={() => start(null)} />
               </Row>
-            </>
+            </Card>
           ) : null}
-        </Card>
-      ) : null}
+        </>
+      )}
 
       {!isEmpty ? (
         <View style={styles.stats}>

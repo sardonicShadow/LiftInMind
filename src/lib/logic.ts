@@ -67,10 +67,16 @@ export function compareSet(now: SetValue, prev: SetValue): Trend {
 
 /* ---------- History ---------- */
 
+/** A point on the workout timeline: the calendar date, then start time within that date. */
+export type TimelinePoint = Pick<Session, 'date' | 'startedAt'>;
+
+export function compareTimeline(a: TimelinePoint, b: TimelinePoint): number {
+  if (a.date !== b.date) return a.date < b.date ? -1 : 1;
+  return a.startedAt - b.startedAt;
+}
+
 export function finishedSessions(sessions: Session[]): Session[] {
-  return sessions
-    .filter((s) => s.finishedAt != null)
-    .sort((a, b) => (a.date === b.date ? (a.startedAt - b.startedAt) : a.date < b.date ? -1 : 1));
+  return sessions.filter((s) => s.finishedAt != null).sort(compareTimeline);
 }
 
 export interface Previous {
@@ -80,19 +86,22 @@ export interface Previous {
 
 /**
  * The working sets from the most recent finished session (other than
- * `excludeId`) that included this exercise. Targets pass `skipDeload` so a
- * lighter deload week doesn't reset progression.
+ * `excludeId`) that included this exercise. Pass `before` to look back from a
+ * point on the timeline, such as a workout being logged for an earlier date,
+ * so later sessions are ignored. Targets pass `skipDeload` so a lighter
+ * deload week doesn't reset progression.
  */
 export function previousPerformance(
   sessions: Session[],
   exerciseId: string,
   excludeId?: string,
-  opts: { skipDeload?: boolean } = {},
+  opts: { skipDeload?: boolean; before?: TimelinePoint } = {},
 ): Previous | null {
   const done = finishedSessions(sessions);
   for (let i = done.length - 1; i >= 0; i--) {
     const s = done[i];
     if (s.id === excludeId || (opts.skipDeload && s.deload)) continue;
+    if (opts.before && compareTimeline(s, opts.before) >= 0) continue;
     const entry = s.entries.find((e) => e.exerciseId === exerciseId);
     if (!entry) continue;
     const sets = workingSets(entry.sets);
@@ -206,6 +215,21 @@ export function planDay(plan: Plan, date: string): PlanDay | null {
     week,
     templateId: plan.days[offset % 7] ?? null,
     deload: plan.deloadEvery != null && plan.deloadEvery > 0 && week % plan.deloadEvery === 0,
+  };
+}
+
+/**
+ * Links a workout of `templateId` on `date` to `plan`. It is on the plan when
+ * it is that day's scheduled workout. Any of the plan's workouts done during a
+ * deload week counts as a deload, even on another weekday, so moving a light
+ * session to a different day doesn't turn it into the base for new targets.
+ */
+export function planLink(plan: Plan | null, templateId: string | null, date: string): { planId: string | null; deload: boolean } {
+  const day = plan ? planDay(plan, date) : null;
+  if (!plan || !day || templateId == null) return { planId: null, deload: false };
+  return {
+    planId: day.templateId === templateId ? plan.id : null,
+    deload: day.deload && plan.days.includes(templateId),
   };
 }
 
