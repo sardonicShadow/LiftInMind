@@ -4,15 +4,16 @@ import { Pressable, StyleSheet, View } from 'react-native';
 
 import { EQUIPMENT_LABEL } from '@/lib/catalog';
 import { shortDate, toISODate, today } from '@/lib/dates';
-import { compareSet, entryVolume, finishedSessions, previousPerformance, sessionVolume, suggestTarget } from '@/lib/logic';
-import { DEFAULT_TARGET, useStore } from '@/lib/store';
+import { compareSet, DEFAULT_TARGET, entryVolume, finishedSessions, previousPerformance, sessionTarget, sessionVolume } from '@/lib/logic';
+import { useStore } from '@/lib/store';
 import type { LoggedSet, Session, SessionEntry, SetValue } from '@/lib/types';
-import { formatVolume, formatWeight, fromDisplay, toDisplay } from '@/lib/units';
+import { formatSets, formatVolume, fromDisplay, toDisplay } from '@/lib/units';
 import { Button, Card, IconButton, Row, Screen, T } from '@/ui/components';
 import { DatePicker } from '@/ui/DatePicker';
 import { ExercisePicker } from '@/ui/ExercisePicker';
 import { Icon } from '@/ui/icons';
 import { NumInput } from '@/ui/NumInput';
+import { goalText } from '@/ui/overload';
 import { colors, fonts } from '@/ui/theme';
 
 function useNow(intervalMs = 1000) {
@@ -72,15 +73,11 @@ function ActiveSession({ session }: { session: Session }) {
     () => (entry ? previousPerformance(data.sessions, entry.exerciseId, session.id, { before: session }) : null),
     [data.sessions, entry, session],
   );
-  // Targets build on the last normal session, so a deload week doesn't reset progress.
-  const base = useMemo(
-    () => (entry ? previousPerformance(data.sessions, entry.exerciseId, session.id, { skipDeload: true, before: session }) : null),
-    [data.sessions, entry, session],
-  );
+  // The same goal the last workout's report set: it builds on the last normal
+  // session, so a deload week doesn't reset progress.
   const suggestion = useMemo(
-    () =>
-      target ? suggestTarget(base?.sets ?? null, target, target.progression ?? session.progression, { deload: session.deload }) : null,
-    [base, target, session.progression, session.deload],
+    () => (entry && target ? sessionTarget(data.sessions, session, entry.exerciseId, target, target.progression ?? session.progression) : null),
+    [data.sessions, entry, session, target],
   );
 
   const setSets = (fn: (sets: LoggedSet[]) => LoggedSet[]) =>
@@ -138,17 +135,14 @@ function ActiveSession({ session }: { session: Session }) {
       return;
     }
     finishSession(session.id);
-    router.replace(`/summary/${session.id}`);
+    router.replace({ pathname: '/summary/[id]', params: { id: session.id, report: '1' } });
   };
 
   const restLeft = restUntil ? restUntil - now : 0;
   const exVolume = entry ? entryVolume(entry) : 0;
   const total = sessionVolume(session);
   const nextEntry = session.entries[i + 1];
-  const fmtSets = (sets: SetValue[]) =>
-    sets.every((s) => s.weight === sets[0].weight)
-      ? `${formatWeight(sets[0].weight, unit)} × ${sets.map((s) => s.reps).join(' · ')}`
-      : sets.map((s) => `${toDisplay(s.weight, unit)}×${s.reps}`).join(' · ');
+  const fmtSets = (sets: SetValue[]) => formatSets(sets, unit);
 
   const header = (
     <View>
@@ -282,7 +276,7 @@ function ActiveSession({ session }: { session: Session }) {
             <View style={styles.target}>
               <Icon name="up" size={18} color={colors.accent} strokeWidth={2.2} />
               <T style={{ flex: 1 }}>
-                <T color={colors.muted}>{`${suggestion.note}: `}</T>
+                <T color={colors.muted}>{`${goalText(suggestion, unit, 'last time')}: `}</T>
                 <T color={colors.accent} style={{ fontFamily: fonts.bold }}>
                   {fmtSets(suggestion.sets)}
                 </T>

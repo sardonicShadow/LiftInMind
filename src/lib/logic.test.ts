@@ -9,8 +9,11 @@ import {
   planDay,
   planLink,
   previousPerformance,
+  nextTarget,
+  overloadVerdict,
+  sessionTarget,
   sessionVolume,
-  suggestTarget,
+  workoutReport,
 } from './logic';
 import type { LoggedSet, Plan, Session } from './types';
 
@@ -99,43 +102,143 @@ describe('previousPerformance', () => {
   });
 });
 
-describe('suggestTarget', () => {
+const sv = (weight: number, ...reps: number[]) => reps.map((r) => ({ weight, reps: r }));
+
+describe('overloadVerdict', () => {
+  it('counts more reps at the same top weight', () => {
+    expect(overloadVerdict(sv(135, 10, 10, 9), sv(135, 9, 9, 9), 8)).toEqual({
+      overloaded: true,
+      reason: { kind: 'more-reps', weight: 135, reps: 2 },
+    });
+  });
+
+  it('counts a heavier weight, including a jump with the reps reset to the bottom of the range', () => {
+    expect(overloadVerdict(sv(140, 8, 8, 8), sv(135, 8, 8, 8), 8).overloaded).toBe(true);
+    expect(overloadVerdict(sv(140, 8, 8, 7), sv(135, 12, 12, 12), 8)).toEqual({ overloaded: true, reason: { kind: 'heavier', weight: 140 } });
+  });
+
+  it('misses when a heavier weight falls below the rep range', () => {
+    expect(overloadVerdict(sv(140, 6, 5, 5), sv(135, 12, 12, 12), 8)).toEqual({
+      overloaded: false,
+      reason: { kind: 'too-heavy', weight: 140, reps: 6, repMin: 8 },
+    });
+  });
+
+  it('counts an extra set at the same top weight and an extra back-off set', () => {
+    expect(overloadVerdict(sv(135, 8, 8, 8, 8), sv(135, 8, 8, 8), 8).reason).toEqual({ kind: 'more-reps', weight: 135, reps: 8 });
+    const backOff = [...sv(135, 8, 8), ...sv(115, 12)];
+    expect(overloadVerdict(backOff, sv(135, 8, 8), 8)).toEqual({ overloaded: true, reason: { kind: 'more-volume', volume: 115 * 12 } });
+  });
+
+  it('misses on fewer reps, a lighter top weight, or an exact repeat', () => {
+    expect(overloadVerdict(sv(135, 9, 8, 8), sv(135, 9, 9, 9), 8)).toEqual({ overloaded: false, reason: { kind: 'fewer-reps', weight: 135, reps: 2 } });
+    expect(overloadVerdict(sv(125, 12, 12, 12), sv(135, 8, 8, 8), 8)).toEqual({
+      overloaded: false,
+      reason: { kind: 'lighter', weight: 125, previous: 135 },
+    });
+    expect(overloadVerdict(sv(80, 12, 12, 11), sv(80, 12, 12, 11), 8)).toEqual({ overloaded: false, reason: { kind: 'matched' } });
+  });
+});
+
+describe('nextTarget', () => {
   const te = { sets: 3, repMin: 8, repMax: 12 };
 
-  it('adds a rep per set under double progression', () => {
-    const t = suggestTarget([{ weight: 135, reps: 8 }, { weight: 135, reps: 8 }, { weight: 135, reps: 7 }], te, 'double');
-    expect(t?.sets).toEqual([
-      { weight: 135, reps: 9 },
-      { weight: 135, reps: 9 },
-      { weight: 135, reps: 8 },
-    ]);
+  it('adds a rep per set after an overload, or the first time', () => {
+    const expected = [...sv(135, 9, 9), ...sv(135, 8)];
+    expect(nextTarget(sv(135, 8, 8, 7), null, te, 'double')).toEqual({ kind: 'add-reps', increment: 0, sets: expected });
+    expect(nextTarget(sv(135, 8, 8, 7), sv(135, 8, 7, 7), te, 'double')?.sets).toEqual(expected);
   });
 
-  it('adds weight once every set hits the top of the range', () => {
-    const top = { weight: 135, reps: 12 };
-    const t = suggestTarget([top, top, top], te, 'double');
-    expect(t?.sets).toEqual([
-      { weight: 140, reps: 8 },
-      { weight: 140, reps: 8 },
-      { weight: 140, reps: 8 },
-    ]);
+  it('asks for one more rep on the weakest set after a miss', () => {
+    // 135 x 10, 9, 8 after 135 x 10, 10, 9 is two reps fewer.
+    expect(nextTarget(sv(135, 10, 9, 8), sv(135, 10, 10, 9), te, 'double')).toEqual({
+      kind: 'one-more-rep',
+      increment: 0,
+      sets: sv(135, 10, 9, 9),
+    });
+    // An exact repeat: the stuck set gets the extra rep.
+    expect(nextTarget(sv(80, 12, 12, 11), sv(80, 12, 12, 11), te, 'double')?.sets).toEqual(sv(80, 12, 12, 12));
+    // Too heavy: build reps at the new weight rather than jumping to the bottom of the range.
+    expect(nextTarget(sv(140, 6, 5, 5), sv(135, 12, 12, 12), te, 'double')?.sets).toEqual(sv(140, 6, 6, 5));
   });
 
-  it('adds a fixed increment under linear progression', () => {
-    const t = suggestTarget([{ weight: 200, reps: 5 }], { sets: 2, repMin: 5, repMax: 5 }, 'linear');
-    expect(t?.sets).toEqual([
-      { weight: 205, reps: 5 },
-      { weight: 205, reps: 5 },
-    ]);
+  it('prefers the top weight for the extra rep after a miss', () => {
+    const last = [...sv(135, 8, 7), ...sv(115, 6)];
+    const prev = [...sv(135, 8, 8), ...sv(115, 10)];
+    expect(nextTarget(last, prev, te, 'double')?.sets).toEqual([...sv(135, 8, 8), ...sv(115, 6)]);
+  });
+
+  it('adds weight once every set hits the top of the range, whatever the verdict', () => {
+    const t = nextTarget(sv(135, 12, 12, 12), sv(135, 12, 12, 12), te, 'double');
+    expect(t).toEqual({ kind: 'top-of-range', increment: 5, sets: sv(140, 8, 8, 8) });
+  });
+
+  it('keeps extra sets so following the goal never means doing less', () => {
+    expect(nextTarget(sv(135, 8, 8, 8, 8), null, te, 'double')?.sets).toEqual(sv(135, 9, 9, 9, 9));
+  });
+
+  it('adds weight under linear progression only when every rep was done', () => {
+    const fiveByFive = { sets: 3, repMin: 5, repMax: 5 };
+    expect(nextTarget(sv(200, 5, 5, 5), null, fiveByFive, 'linear')).toEqual({ kind: 'add-weight', increment: 5, sets: sv(205, 5, 5, 5) });
+    expect(nextTarget(sv(205, 5, 5, 3), sv(200, 5, 5, 5), fiveByFive, 'linear')).toEqual({
+      kind: 'repeat-weight',
+      increment: 0,
+      sets: sv(205, 5, 5, 5),
+    });
+    // A skipped set counts as missed reps.
+    expect(nextTarget(sv(200, 5, 5), null, fiveByFive, 'linear')?.kind).toBe('repeat-weight');
   });
 
   it('drops to 90% on a deload week', () => {
-    const t = suggestTarget([{ weight: 200, reps: 5 }], { sets: 1, repMin: 5, repMax: 8 }, 'double', { deload: true });
-    expect(t?.sets[0].weight).toBe(180);
+    const t = nextTarget(sv(200, 5), null, { sets: 1, repMin: 5, repMax: 8 }, 'double', { deload: true });
+    expect(t).toEqual({ kind: 'deload', increment: 0, sets: sv(180, 5) });
   });
 
   it('returns null with no history', () => {
-    expect(suggestTarget(null, te, 'double')).toBeNull();
+    expect(nextTarget(null, null, te, 'double')).toBeNull();
+  });
+});
+
+describe('workoutReport', () => {
+  const target = { exerciseId: 'bench', sets: 3, repMin: 8, repMax: 12, restSec: 120 };
+  const withTarget = (s: Session) => ({ ...s, entries: s.entries.map((e) => ({ ...e, target })) });
+
+  it('marks each exercise against the last normal workout and sets the next goal', () => {
+    const a = withTarget(session('2026-09-01', { bench: [w(135, 9), w(135, 9), w(135, 9)] }));
+    const b = withTarget(session('2026-09-04', { bench: [w(95, 10, 'warmup'), w(135, 10), w(135, 10), w(135, 9)], fly: [w(20, 12)] }));
+    const [bench, fly] = workoutReport([a, b], b);
+    expect(bench.status).toBe('overloaded');
+    expect(bench.reason).toEqual({ kind: 'more-reps', weight: 135, reps: 2 });
+    expect(bench.previous?.session.id).toBe(a.id);
+    expect(bench.goal?.sets).toEqual(sv(135, 11, 11, 10));
+    expect(fly.status).toBe('first');
+    expect(fly.goal?.kind).toBe('add-reps');
+  });
+
+  it('skips exercises with no working sets', () => {
+    const a = session('2026-09-01', { bench: [w(95, 10, 'warmup')] });
+    expect(workoutReport([a], a)).toEqual([]);
+  });
+
+  it('compares with the last normal workout and does not judge a deload', () => {
+    const a = withTarget(session('2026-09-01', { bench: sv(135, 10, 10, 10).map((x) => w(x.weight, x.reps)) }));
+    const d = withTarget(session('2026-09-08', { bench: sv(120, 10, 10, 10).map((x) => w(x.weight, x.reps)) }, { deload: true }));
+    const [deload] = workoutReport([a, d], d);
+    expect(deload.status).toBe('deload');
+    expect(deload.goal?.sets).toEqual(sv(135, 11, 11, 11));
+    const c = withTarget(session('2026-09-15', { bench: sv(135, 10, 10, 9).map((x) => w(x.weight, x.reps)) }));
+    const [after] = workoutReport([a, d, c], c);
+    expect(after.previous?.session.id).toBe(a.id);
+    expect(after.status).toBe('missed');
+  });
+
+  it('sets the same goal the next workout shows while logging', () => {
+    const a = withTarget(session('2026-09-01', { bench: sv(135, 10, 10, 9).map((x) => w(x.weight, x.reps)) }));
+    const b = withTarget(session('2026-09-04', { bench: sv(135, 10, 9, 8).map((x) => w(x.weight, x.reps)) }));
+    const next = session('2026-09-08', { bench: [] }, { finishedAt: null });
+    const [report] = workoutReport([a, b], b);
+    expect(report.status).toBe('missed');
+    expect(sessionTarget([a, b, next], next, 'bench', target, 'double')).toEqual(report.goal);
   });
 });
 

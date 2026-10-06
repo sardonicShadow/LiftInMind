@@ -3,20 +3,24 @@ import { useMemo, useState } from 'react';
 import { Pressable, TextInput, View } from 'react-native';
 
 import { shortDate, toISODate } from '@/lib/dates';
-import { bestSet, compareSet, e1rm, entryVolume, exerciseHistory, finishedSessions, sessionVolume, workingSetCount, workingSets } from '@/lib/logic';
+import { bestSet, e1rm, entryVolume, exerciseHistory, finishedSessions, sessionVolume, workingSetCount, workingSets, workoutReport } from '@/lib/logic';
 import { useStore } from '@/lib/store';
 import { formatVolume, formatWeight } from '@/lib/units';
 import { Button, Card, Row, Screen, T } from '@/ui/components';
 import { DatePicker } from '@/ui/DatePicker';
 import { Icon } from '@/ui/icons';
+import { OverloadMark, statusColor } from '@/ui/overload';
 import { colors, fonts } from '@/ui/theme';
+import { WorkoutReport } from '@/ui/WorkoutReport';
 
 export default function SummaryScreen() {
-  const { id } = useLocalSearchParams<{ id: string }>();
+  // `report=1` comes from finishing a workout: open the report pop-up straight away.
+  const { id, report } = useLocalSearchParams<{ id: string; report?: string }>();
   const { data, exerciseById, updateSession, setSessionDate, deleteSession } = useStore();
   const session = data.sessions.find((s) => s.id === id);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [pickingDate, setPickingDate] = useState(false);
+  const [showReport, setShowReport] = useState(report === '1');
   const workoutDays = useMemo(() => new Set(finishedSessions(data.sessions).map((s) => s.date)), [data.sessions]);
   if (!session) {
     return (
@@ -38,14 +42,24 @@ export default function SummaryScreen() {
   const change = priorVolume > 0 ? ((total - priorVolume) / priorVolume) * 100 : null;
   // A workout logged on a later day than it happened has no meaningful duration.
   const loggedSameDay = toISODate(new Date(session.startedAt)) === session.date;
-  const minutes = session.finishedAt && loggedSameDay ? Math.round((session.finishedAt - session.startedAt) / 60000) : null;
+  const elapsed = session.finishedAt && loggedSameDay ? Math.round((session.finishedAt - session.startedAt) / 60000) : 0;
+  const minutes = elapsed >= 1 ? elapsed : null;
+
+  const overload = workoutReport(data.sessions, session);
+  const statusOf = new Map(overload.map((r) => [r.exerciseId, r.status]));
+  const judged = overload.filter((r) => r.status === 'overloaded' || r.status === 'missed');
+  const wins = judged.filter((r) => r.status === 'overloaded').length;
+  const stats = { total, workingSets: workingSetCount(session), minutes, change };
+  const closeReport = () => {
+    setShowReport(false);
+    if (report) router.setParams({ report: undefined });
+  };
 
   const rows = session.entries
     .map((e) => {
       const ex = exerciseById(e.exerciseId);
       const history = exerciseHistory(data.sessions, e.exerciseId);
       const at = history.findIndex((h) => h.session.id === session.id);
-      const before = at > 0 ? history[at - 1] : null;
       const sets = workingSets(e.sets);
       const best = bestSet(sets);
       const priorBest = history.slice(0, Math.max(at, 0)).reduce<number>((m, h) => Math.max(m, e1rm(h.best)), 0);
@@ -53,8 +67,7 @@ export default function SummaryScreen() {
         id: e.exerciseId,
         name: ex?.name ?? e.exerciseId,
         volume: entryVolume(e),
-        trend: before && best ? compareSet(best, before.best) : null,
-        beat: !!before && entryVolume(e) > before.volume,
+        status: statusOf.get(e.exerciseId) ?? null,
         newBest: best && at > 0 && e1rm(best) > priorBest ? best : null,
       };
     })
@@ -63,7 +76,6 @@ export default function SummaryScreen() {
 
   const maxVol = Math.max(1, ...rows.map((r) => r.volume));
   const bests = rows.filter((r) => r.newBest);
-  const beatCount = rows.filter((r) => r.trend === 'up').length;
 
   return (
     <Screen contentStyle={{ paddingTop: 24 }}>
@@ -122,13 +134,18 @@ export default function SummaryScreen() {
             </T>
           </View>
           <View>
-            <T variant="num">{`${beatCount} of ${rows.length}`}</T>
+            <T variant="num" color={judged.length ? (wins > 0 ? colors.good : colors.bad) : undefined}>
+              {judged.length ? `${wins} of ${judged.length}` : '–'}
+            </T>
             <T variant="small" style={{ fontSize: 12 }}>
-              beat last time
+              overloaded
             </T>
           </View>
         </Row>
       </Card>
+
+      <Button title="Workout report" icon="chart" variant="secondary" size="medium" onPress={() => setShowReport(true)} />
+      <WorkoutReport visible={showReport} onClose={closeReport} session={session} rows={overload} stats={stats} />
 
       <View style={{ gap: 4 }}>
         <T variant="label">Volume by exercise</T>
@@ -138,12 +155,8 @@ export default function SummaryScreen() {
               <T style={{ flex: 1 }} numberOfLines={1}>
                 {r.name}
               </T>
-              <T>
-                {formatVolume(r.volume, unit)}{' '}
-                <T color={r.trend === 'up' ? colors.accent : r.trend === 'down' ? colors.warn : colors.faint}>
-                  {r.trend === 'up' ? '▲' : r.trend === 'down' ? '▼' : r.trend === 'same' ? '=' : ''}
-                </T>
-              </T>
+              <T>{formatVolume(r.volume, unit)}</T>
+              {r.status ? <OverloadMark status={r.status} size={20} /> : null}
             </Row>
             <View style={{ height: 6, borderRadius: 3, backgroundColor: colors.surface2 }}>
               <View
@@ -151,14 +164,14 @@ export default function SummaryScreen() {
                   width: `${(r.volume / maxVol) * 100}%`,
                   height: 6,
                   borderRadius: 3,
-                  backgroundColor: r.trend === 'up' ? colors.accent : '#5C6168',
+                  backgroundColor: r.status === 'overloaded' || r.status === 'missed' ? statusColor(r.status) : '#5C6168',
                 }}
               />
             </View>
           </View>
         ))}
         <T variant="small" style={{ fontSize: 12 }}>
-          ▲ best set beat last time · = matched · ▼ below last time
+          Green check: progressive overload. Red X: no overload. Each is compared with the last time you did that exercise.
         </T>
       </View>
 
