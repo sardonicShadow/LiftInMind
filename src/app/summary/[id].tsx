@@ -1,20 +1,23 @@
 import { router, useLocalSearchParams } from 'expo-router';
-import { useState } from 'react';
-import { TextInput, View } from 'react-native';
+import { useMemo, useState } from 'react';
+import { Pressable, TextInput, View } from 'react-native';
 
-import { shortDate } from '@/lib/dates';
+import { shortDate, toISODate } from '@/lib/dates';
 import { bestSet, compareSet, e1rm, entryVolume, exerciseHistory, finishedSessions, sessionVolume, workingSetCount, workingSets } from '@/lib/logic';
 import { useStore } from '@/lib/store';
 import { formatVolume, formatWeight } from '@/lib/units';
 import { Button, Card, Row, Screen, T } from '@/ui/components';
+import { DatePicker } from '@/ui/DatePicker';
 import { Icon } from '@/ui/icons';
 import { colors, fonts } from '@/ui/theme';
 
 export default function SummaryScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
-  const { data, exerciseById, updateSession, deleteSession } = useStore();
+  const { data, exerciseById, updateSession, setSessionDate, deleteSession } = useStore();
   const session = data.sessions.find((s) => s.id === id);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [pickingDate, setPickingDate] = useState(false);
+  const workoutDays = useMemo(() => new Set(finishedSessions(data.sessions).map((s) => s.date)), [data.sessions]);
   if (!session) {
     return (
       <Screen>
@@ -33,7 +36,9 @@ export default function SummaryScreen() {
     .pop();
   const priorVolume = prior ? sessionVolume(prior) : 0;
   const change = priorVolume > 0 ? ((total - priorVolume) / priorVolume) * 100 : null;
-  const minutes = session.finishedAt ? Math.round((session.finishedAt - session.startedAt) / 60000) : null;
+  // A workout logged on a later day than it happened has no meaningful duration.
+  const loggedSameDay = toISODate(new Date(session.startedAt)) === session.date;
+  const minutes = session.finishedAt && loggedSameDay ? Math.round((session.finishedAt - session.startedAt) / 60000) : null;
 
   const rows = session.entries
     .map((e) => {
@@ -67,8 +72,25 @@ export default function SummaryScreen() {
           Workout complete
         </T>
         <T variant="display">{session.name}</T>
-        <T variant="small">{`${shortDate(session.date)}${minutes != null ? ` · ${minutes} min` : ''}${session.deload ? ' · Deload' : ''}`}</T>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={`Workout date ${shortDate(session.date)}. Change date`}
+          onPress={() => setPickingDate(true)}
+          style={({ pressed }) => [{ flexDirection: 'row', alignItems: 'center', gap: 6, alignSelf: 'flex-start' }, pressed && { opacity: 0.7 }]}>
+          <Icon name="calendar" size={16} color={colors.accent} strokeWidth={2} />
+          <T variant="small" color={colors.accent} style={{ fontFamily: fonts.semibold }}>
+            {shortDate(session.date)}
+          </T>
+          <T variant="small">{`${minutes != null ? ` · ${minutes} min` : ''}${session.deload ? ' · Deload' : ''}`}</T>
+        </Pressable>
       </View>
+      <DatePicker
+        visible={pickingDate}
+        value={session.date}
+        marked={(d) => workoutDays.has(d)}
+        onClose={() => setPickingDate(false)}
+        onPick={(d) => setSessionDate(session.id, d)}
+      />
 
       <Card>
         <T variant="small">Total weight lifted · working sets</T>

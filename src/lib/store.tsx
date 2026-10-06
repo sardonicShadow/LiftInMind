@@ -4,7 +4,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import { CATALOG } from './catalog';
 import { today } from './dates';
 import { buildSampleData } from './demo';
-import { planDay } from './logic';
+import { planLink } from './logic';
 import type { AppData, Exercise, Plan, Session, SessionEntry, TemplateExercise, Unit, WorkoutTemplate } from './types';
 
 const STORAGE_KEY = 'liftinmind:data:v1';
@@ -48,6 +48,8 @@ interface Store {
   deletePlan: (id: string) => void;
   setActivePlan: (id: string | null) => void;
   startSession: (templateId: string | null, date?: string) => Session;
+  /** Moves a workout to another day, re-checking whether it is that day's planned workout. */
+  setSessionDate: (id: string, date: string) => void;
   updateSession: (id: string, fn: (s: Session) => Session) => void;
   addExerciseToSession: (sessionId: string, exerciseId: string) => void;
   finishSession: (id: string) => void;
@@ -131,23 +133,33 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     startSession: (templateId, date = today()) => {
       if (activeSession) return activeSession;
       const template = data.templates.find((t) => t.id === templateId) ?? null;
-      const day = activePlan ? planDay(activePlan, date) : null;
-      const onPlan = !!day && !!template && day.templateId === template.id;
       const session: Session = {
         id: newId(),
         date,
         startedAt: Date.now(),
         finishedAt: null,
         templateId: template?.id ?? null,
-        planId: onPlan ? activePlan!.id : null,
         name: template?.name ?? 'Quick workout',
         entries: template ? template.exercises.map(entryFromTarget) : [],
-        deload: onPlan ? day!.deload : false,
+        ...planLink(activePlan, template?.id ?? null, date),
         progression: activePlan?.progression ?? 'double',
       };
       update((d) => ({ ...d, sessions: [...d.sessions, session] }));
       return session;
     },
+    setSessionDate: (id, date) =>
+      update((d) => {
+        const plan = d.plans.find((p) => p.id === d.activePlanId) ?? null;
+        return {
+          ...d,
+          sessions: d.sessions.map((s) => {
+            if (s.id !== id || s.date === date) return s;
+            // Keep a link to a plan that isn't active any more unless the new date moves it off that plan's schedule.
+            const linked = d.plans.find((p) => p.id === s.planId) ?? plan;
+            return { ...s, date, ...planLink(linked, s.templateId, date) };
+          }),
+        };
+      }),
     updateSession: (id, fn) =>
       update((d) => ({ ...d, sessions: d.sessions.map((s) => (s.id === id ? fn(s) : s)) })),
     addExerciseToSession: (sessionId, exerciseId) =>

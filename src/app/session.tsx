@@ -3,12 +3,13 @@ import { useEffect, useMemo, useState } from 'react';
 import { Pressable, StyleSheet, View } from 'react-native';
 
 import { EQUIPMENT_LABEL } from '@/lib/catalog';
-import { shortDate } from '@/lib/dates';
-import { compareSet, entryVolume, previousPerformance, sessionVolume, suggestTarget } from '@/lib/logic';
+import { shortDate, today } from '@/lib/dates';
+import { compareSet, entryVolume, finishedSessions, previousPerformance, sessionVolume, suggestTarget } from '@/lib/logic';
 import { DEFAULT_TARGET, useStore } from '@/lib/store';
 import type { LoggedSet, Session, SessionEntry, SetValue } from '@/lib/types';
 import { formatVolume, formatWeight, fromDisplay, toDisplay } from '@/lib/units';
 import { Button, Card, IconButton, Row, Screen, T } from '@/ui/components';
+import { DatePicker } from '@/ui/DatePicker';
 import { ExercisePicker } from '@/ui/ExercisePicker';
 import { Icon } from '@/ui/icons';
 import { NumInput } from '@/ui/NumInput';
@@ -45,7 +46,7 @@ export default function SessionScreen() {
 }
 
 function ActiveSession({ session }: { session: Session }) {
-  const { data, exerciseById, updateSession, addExerciseToSession, finishSession, discardSession } = useStore();
+  const { data, exerciseById, updateSession, setSessionDate, addExerciseToSession, finishSession, discardSession } = useStore();
   const unit = data.unit;
   const now = useNow();
   const firstOpen = session.entries.findIndex((e) => e.sets.some((s) => !s.done));
@@ -53,20 +54,26 @@ function ActiveSession({ session }: { session: Session }) {
   const [picking, setPicking] = useState(false);
   const [restUntil, setRestUntil] = useState<number | null>(null);
   const [confirmDiscard, setConfirmDiscard] = useState(false);
+  const [pickingDate, setPickingDate] = useState(false);
+  // Logging a workout after the fact: no live clock or rest timer.
+  const live = session.date === today();
+  const workoutDays = useMemo(() => new Set(finishedSessions(data.sessions).map((s) => s.date)), [data.sessions]);
 
   const entry: SessionEntry | undefined = session.entries[Math.min(index, session.entries.length - 1)];
   const i = Math.min(index, session.entries.length - 1);
   const exercise = entry ? exerciseById(entry.exerciseId) : undefined;
   const target = entry?.target ?? (entry ? { exerciseId: entry.exerciseId, ...DEFAULT_TARGET } : undefined);
 
+  // "Last time" means the last time before this workout's date, so a back-dated
+  // workout builds on what came before it rather than on later sessions.
   const prev = useMemo(
-    () => (entry ? previousPerformance(data.sessions, entry.exerciseId, session.id) : null),
-    [data.sessions, entry, session.id],
+    () => (entry ? previousPerformance(data.sessions, entry.exerciseId, session.id, { before: session }) : null),
+    [data.sessions, entry, session],
   );
   // Targets build on the last normal session, so a deload week doesn't reset progress.
   const base = useMemo(
-    () => (entry ? previousPerformance(data.sessions, entry.exerciseId, session.id, { skipDeload: true }) : null),
-    [data.sessions, entry, session.id],
+    () => (entry ? previousPerformance(data.sessions, entry.exerciseId, session.id, { skipDeload: true, before: session }) : null),
+    [data.sessions, entry, session],
   );
   const suggestion = useMemo(
     () =>
@@ -102,7 +109,7 @@ function ActiveSession({ session }: { session: Session }) {
     const reps = set.reps ?? ph?.reps ?? null;
     if (weight == null || reps == null) return;
     patchSet(k, { weight, reps, done: true });
-    if (set.kind === 'working') setRestUntil(Date.now() + (target?.restSec ?? 120) * 1000);
+    if (set.kind === 'working' && live) setRestUntil(Date.now() + (target?.restSec ?? 120) * 1000);
   };
 
   const addSet = (kind: LoggedSet['kind']) =>
@@ -149,7 +156,17 @@ function ActiveSession({ session }: { session: Session }) {
           <T variant="h2" style={{ fontSize: 20, lineHeight: 24 }} numberOfLines={1}>
             {session.name}
           </T>
-          <T variant="small">{`${clock(now - session.startedAt)} elapsed${session.deload ? ' · Deload' : ''}`}</T>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={`Workout date ${shortDate(session.date)}. Change date`}
+            onPress={() => setPickingDate(true)}
+            style={({ pressed }) => [styles.dateBtn, pressed && { opacity: 0.7 }]}>
+            <Icon name="calendar" size={14} color={colors.accent} strokeWidth={2} />
+            <T variant="small" color={colors.accent} style={{ fontFamily: fonts.semibold }}>
+              {live ? 'Today' : shortDate(session.date)}
+            </T>
+            <T variant="small">{`${live ? ` · ${clock(now - session.startedAt)}` : ''}${session.deload ? ' · Deload' : ''}`}</T>
+          </Pressable>
         </View>
         <Pressable accessibilityRole="button" onPress={finish} style={styles.finish}>
           <T color={colors.accent} style={{ fontFamily: fonts.semibold }}>
@@ -395,8 +412,20 @@ function ActiveSession({ session }: { session: Session }) {
         }}
       />
 
+      <DatePicker
+        visible={pickingDate}
+        value={session.date}
+        marked={(d) => workoutDays.has(d)}
+        onClose={() => setPickingDate(false)}
+        onPick={(d) => {
+          setSessionDate(session.id, d);
+          if (d !== today()) setRestUntil(null);
+        }}
+      />
+
       <ExercisePicker
         visible={picking}
+        before={session}
         onClose={() => setPicking(false)}
         exclude={session.entries.map((e) => e.exerciseId)}
         onPick={(ids) => {
@@ -411,6 +440,7 @@ function ActiveSession({ session }: { session: Session }) {
 
 const styles = StyleSheet.create({
   top: { paddingHorizontal: 20, paddingTop: 12, paddingBottom: 12, gap: 12 },
+  dateBtn: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingVertical: 2 },
   finish: { height: 40, paddingHorizontal: 16, borderRadius: 20, backgroundColor: colors.surface2, justifyContent: 'center' },
   target: {
     flexDirection: 'row',

@@ -7,6 +7,7 @@ import {
   judge,
   monthlyReport,
   planDay,
+  planLink,
   previousPerformance,
   sessionVolume,
   suggestTarget,
@@ -59,6 +60,36 @@ describe('previousPerformance', () => {
     const prev = previousPerformance([a, c, b, current], 'bench', current.id);
     expect(prev?.session.id).toBe(b.id);
     expect(prev?.sets).toEqual([{ weight: 130, reps: 8 }]);
+  });
+
+  it('looks back from the date of a back-dated workout, ignoring later sessions', () => {
+    const a = session('2026-09-01', { bench: [w(125, 8)] });
+    const b = session('2026-09-05', { bench: [w(130, 8)] });
+    const c = session('2026-09-12', { bench: [w(140, 8)] });
+    // Logged today (late startedAt) for Sept 8: "last time" is Sept 5, not Sept 12.
+    const backdated = session('2026-09-08', { bench: [] }, { finishedAt: null, startedAt: 10_000 });
+    expect(previousPerformance([a, b, c, backdated], 'bench', backdated.id, { before: backdated })?.session.id).toBe(b.id);
+    // Nothing earlier than Sept 1.
+    expect(previousPerformance([a, b, c], 'bench', undefined, { before: { date: '2026-09-01', startedAt: 0 } })).toBeNull();
+  });
+
+  it('counts an earlier workout on the same day but not a later one', () => {
+    const morning = session('2026-09-05', { bench: [w(130, 8)] }, { startedAt: 100 });
+    const evening = session('2026-09-05', { bench: [w(135, 8)] }, { startedAt: 300 });
+    const middle = { date: '2026-09-05', startedAt: 200 };
+    expect(previousPerformance([morning, evening], 'bench', undefined, { before: middle })?.session.id).toBe(morning.id);
+    expect(previousPerformance([morning, evening], 'bench', undefined, { before: { date: '2026-09-05', startedAt: Infinity } })?.session.id).toBe(
+      evening.id,
+    );
+  });
+
+  it('combines the date lookback with skipping deloads', () => {
+    const a = session('2026-09-01', { bench: [w(130, 8)] });
+    const deload = session('2026-09-08', { bench: [w(115, 8)] }, { deload: true });
+    const later = session('2026-09-20', { bench: [w(140, 8)] });
+    const before = { date: '2026-09-10', startedAt: 0 };
+    expect(previousPerformance([a, deload, later], 'bench', undefined, { before })?.session.id).toBe(deload.id);
+    expect(previousPerformance([a, deload, later], 'bench', undefined, { before, skipDeload: true })?.session.id).toBe(a.id);
   });
 
   it('ignores warm-up only entries', () => {
@@ -204,6 +235,26 @@ describe('planDay', () => {
     expect(planDay(plan, '2026-09-23')).toEqual({ week: 3, templateId: null, deload: true });
     expect(planDay(plan, '2026-09-06')).toBeNull();
     expect(planDay(plan, addDays(plan.startDate, 42))).toBeNull();
+  });
+});
+
+describe('planLink', () => {
+  const plan: Plan = {
+    id: 'p',
+    name: 'PPL',
+    weeks: 6,
+    startDate: '2026-09-07',
+    days: ['push', 'pull', null, 'legs', null, 'upper', null],
+    deloadEvery: 3,
+    progression: 'double',
+  };
+
+  it('links a workout to the plan only on its scheduled day', () => {
+    expect(planLink(plan, 'push', '2026-09-07')).toEqual({ planId: 'p', deload: false });
+    expect(planLink(plan, 'push', '2026-09-08')).toEqual({ planId: null, deload: false });
+    expect(planLink(plan, 'push', '2026-09-21')).toEqual({ planId: 'p', deload: true });
+    expect(planLink(plan, null, '2026-09-07')).toEqual({ planId: null, deload: false });
+    expect(planLink(null, 'push', '2026-09-07')).toEqual({ planId: null, deload: false });
   });
 });
 
